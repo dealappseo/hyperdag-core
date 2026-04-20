@@ -1,8 +1,0 @@
-[phases.setup]
-nixPkgs = ["rust", "cargo", "openssl", "pkg-config"]
-
-[phases.build]
-cmds = ["cargo build --release"]
-
-[start]
-cmd = "./target/release/zkp-postcard"
