@@ -1,0 +1,6 @@
+[workspace]
+members = [
+  "rust-brain",
+  "services/zkp-postcard"
+]
+resolver = "2"

@@ -1,0 +1,12 @@
+C:\Users\Cash4\hyperdag-core-temp\target\release\deps\p3_mds-b2a69eb3303a3e2f.d: C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\mds\src\lib.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\mds\src\butterflies.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\mds\src\coset_mds.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\mds\src\integrated_coset_mds.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\mds\src\karatsuba_convolution.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\mds\src\util.rs
+
+C:\Users\Cash4\hyperdag-core-temp\target\release\deps\libp3_mds-b2a69eb3303a3e2f.rlib: C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\mds\src\lib.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\mds\src\butterflies.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\mds\src\coset_mds.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\mds\src\integrated_coset_mds.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\mds\src\karatsuba_convolution.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\mds\src\util.rs
+
+C:\Users\Cash4\hyperdag-core-temp\target\release\deps\libp3_mds-b2a69eb3303a3e2f.rmeta: C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\mds\src\lib.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\mds\src\butterflies.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\mds\src\coset_mds.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\mds\src\integrated_coset_mds.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\mds\src\karatsuba_convolution.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\mds\src\util.rs
+
+C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\mds\src\lib.rs:
+C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\mds\src\butterflies.rs:
+C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\mds\src\coset_mds.rs:
+C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\mds\src\integrated_coset_mds.rs:
+C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\mds\src\karatsuba_convolution.rs:
+C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\mds\src\util.rs:

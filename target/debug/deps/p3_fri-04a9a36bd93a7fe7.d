@@ -1,0 +1,12 @@
+C:\Users\Cash4\hyperdag-core-temp\target\debug\deps\p3_fri-04a9a36bd93a7fe7.d: C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\fri\src\lib.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\fri\src\config.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\fri\src\hiding_pcs.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\fri\src\periodic.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\fri\src\proof.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\fri\src\prover.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\fri\src\two_adic_pcs.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\fri\src\verifier.rs
+
+C:\Users\Cash4\hyperdag-core-temp\target\debug\deps\libp3_fri-04a9a36bd93a7fe7.rmeta: C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\fri\src\lib.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\fri\src\config.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\fri\src\hiding_pcs.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\fri\src\periodic.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\fri\src\proof.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\fri\src\prover.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\fri\src\two_adic_pcs.rs C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\fri\src\verifier.rs
+
+C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\fri\src\lib.rs:
+C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\fri\src\config.rs:
+C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\fri\src\hiding_pcs.rs:
+C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\fri\src\periodic.rs:
+C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\fri\src\proof.rs:
+C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\fri\src\prover.rs:
+C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\fri\src\two_adic_pcs.rs:
+C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\0f87f2b\fri\src\verifier.rs:

@@ -1,0 +1,8 @@
+[build]
+builder = "NIXPACKS"
+buildCommand = "cargo build --release"
+
+[deploy]
+startCommand = "./target/release/zkp-postcard"
+healthcheckPath = "/health"
+healthcheckTimeout = 300
