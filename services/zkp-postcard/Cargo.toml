@@ -1,0 +1,32 @@
+[package]
+name = "zkp-postcard"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "zkp-postcard"
+path = "src/main.rs"
+
+[dependencies]
+# Plonky3 — git pinned to latest main
+p3-field = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
+p3-baby-bear = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
+p3-fri = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
+p3-merkle-tree = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
+p3-matrix = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
+p3-challenger = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
+p3-commit = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
+p3-uni-stark = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
+p3-symmetric = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
+p3-dft = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
+p3-air = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
+
+# Standard deps
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.5", features = ["cors"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
+chrono = { version = "0.4", features = ["serde"] }

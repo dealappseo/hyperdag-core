@@ -1,0 +1,172 @@
+﻿cargo :     Checking zkp-postcard v0.1.0 (C:\Users\Cash4\OneDrive\Desktop\trinity-ecosystem\services\zkp-postcard)
+At line:1 char:1
++ cargo check 2>&1 | Out-File -Encoding utf8 check_utf8.txt
++ ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Checking zk...s\zkp-postcard):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+error[E0432]: unresolved import `p3_field::AbstractField`
+  --> src\circuit.rs:15:16
+   |
+15 | use p3_field::{AbstractField, Field};
+   |                ^^^^^^^^^^^^^ no `AbstractField` in the root
+
+error[E0432]: unresolved import `p3_fri::FriConfig`
+  --> src\circuit.rs:16:5
+   |
+16 | use p3_fri::FriConfig;
+   |     ^^^^^^^^^^^^^^^^^ no `FriConfig` in the root
+
+error[E0432]: unresolved import `p3_symmetric::SerializingHasher32`
+  --> src\circuit.rs:22:51
+   |
+22 | use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
+   |                                                   ^^^^^^^^^^^^^^^^^^^
+   |                                                   |
+   |                                                   no `SerializingHasher32` in the root
+   |                                                   help: a similar name exists in the module: `SerializingHasher`
+
+error[E0277]: the trait bound `<AB as AirBuilder>::F: p3_field::Field` is not satisfied
+   --> src\circuit.rs:36:34
+    |
+ 36 | impl<AB: AirBuilder> Air<AB> for RepIdRangeCheckAir {
+    |                                  ^^^^^^^^^^^^^^^^^^ the trait `p3_field::Field` is not implemented for `<AB as 
+AirBuilder>::F`
+    |
+note: required for `RepIdRangeCheckAir` to implement `BaseAir<<AB as AirBuilder>::F>`
+   --> src\circuit.rs:30:16
+    |
+ 30 | impl<F: Field> BaseAir<F> for RepIdRangeCheckAir {
+    |         -----  ^^^^^^^^^^     ^^^^^^^^^^^^^^^^^^
+    |         |
+    |         unsatisfied trait bound introduced here
+note: required by a bound in `Air`
+   --> C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\6374a36\air\src\air.rs:191:32
+    |
+191 | pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
+    |                                ^^^^^^^^^^^^^^ required by this bound in `Air`
+help: consider further restricting the associated type
+    |
+ 36 | impl<AB: AirBuilder> Air<AB> for RepIdRangeCheckAir where <AB as AirBuilder>::F: p3_field::Field {
+    |                                                     ++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0107]: struct takes 6 generic arguments but 5 generic arguments were supplied
+  --> src\circuit.rs:90:20
+   |
+90 |     type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
+   |                    ^^^^^^^^^^^^^^ ---  --  ---------  ----------  -- supplied 5 generic arguments
+   |                    |
+   |                    expected 6 generic arguments
+   |
+note: struct defined here, with 6 generic parameters: `P`, `PW`, `H`, `C`, `N`, `DIGEST_ELEMS`
+  --> C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\6374a36\merkle-tree\src\mmcs.rs:59:12
+   |
+59 | pub struct MerkleTreeMmcs<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize> {
+   |            ^^^^^^^^^^^^^^ -  --  -  -  --------------  -------------------------
+help: add missing generic argument
+   |
+90 |     type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32, DIGEST_ELEMS>;
+   |                                                                     ++++++++++++++
+
+error[E0599]: no method named `row_slice` found for associated type `<AB as AirBuilder>::MainWindow` in the current 
+scope
+  --> src\circuit.rs:39:24
+   |
+39 |         let row = main.row_slice(0);
+   |                        ^^^^^^^^^ method not found in `<AB as AirBuilder>::MainWindow`
+
+error[E0599]: no associated item named `ZERO` found for associated type `<AB as AirBuilder>::Expr` in the current scope
+  --> src\circuit.rs:42:45
+   |
+42 |         builder.assert_eq(row[0], AB::Expr::ZERO);
+   |                                             ^^^^ associated item not found in `<AB as AirBuilder>::Expr`
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `PrimeCharacteristicRing` which provides `ZERO` is implemented but not in scope; perhaps you want to 
+import it
+   |
+11 + use p3_field::PrimeCharacteristicRing;
+   |
+
+error[E0282]: type annotations needed for `&_`
+  --> src\circuit.rs:47:19
+   |
+47 |             .map(|&bit| bit.into())
+   |                   ^^^^  --- type must be known at this point
+   |
+help: consider giving this closure parameter an explicit type, where the placeholders `_` are specified
+   |
+47 |             .map(|&bit: &_| bit.into())
+   |                       ++++
+
+error[E0282]: type annotations needed for `&_`
+  --> src\circuit.rs:51:19
+   |
+51 |             .map(|&bit| bit.into())
+   |                   ^^^^  --- type must be known at this point
+   |
+help: consider giving this closure parameter an explicit type, where the placeholders `_` are specified
+   |
+51 |             .map(|&bit: &_| bit.into())
+   |                       ++++
+
+error[E0599]: no associated item named `ZERO` found for associated type `<AB as AirBuilder>::Expr` in the current scope
+  --> src\circuit.rs:56:43
+   |
+56 |         let mut reconstructed = AB::Expr::ZERO;
+   |                                           ^^^^ associated item not found in `<AB as AirBuilder>::Expr`
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `PrimeCharacteristicRing` which provides `ZERO` is implemented but not in scope; perhaps you want to 
+import it
+   |
+11 + use p3_field::PrimeCharacteristicRing;
+   |
+
+error[E0599]: no function or associated item named `from_wrapped_u32` found for associated type `<AB as 
+AirBuilder>::Expr` in the current scope
+  --> src\circuit.rs:60:40
+   |
+60 |             reconstructed += AB::Expr::from_wrapped_u32(1 << (31 - i)) * bit;
+   |                                        ^^^^^^^^^^^^^^^^ function or associated item not found in `<AB as 
+AirBuilder>::Expr`
+   |
+help: there is an associated function `from_u32` with a similar name
+   |
+60 -             reconstructed += AB::Expr::from_wrapped_u32(1 << (31 - i)) * bit;
+60 +             reconstructed += AB::Expr::from_u32(1 << (31 - i)) * bit;
+   |
+
+error[E0599]: no function or associated item named `from_wrapped_u32` found for associated type `<AB as 
+AirBuilder>::Expr` in the current scope
+  --> src\circuit.rs:64:34
+   |
+64 |             .assert_eq(AB::Expr::from_wrapped_u32(self.value), reconstructed);
+   |                                  ^^^^^^^^^^^^^^^^ function or associated item not found in `<AB as 
+AirBuilder>::Expr`
+   |
+help: there is an associated function `from_u32` with a similar name
+   |
+64 -             .assert_eq(AB::Expr::from_wrapped_u32(self.value), reconstructed);
+64 +             .assert_eq(AB::Expr::from_u32(self.value), reconstructed);
+   |
+
+error[E0061]: this function takes 2 arguments but 1 argument was supplied
+   --> src\circuit.rs:113:18
+    |
+113 |     let config = StarkConfig::new(pcs);
+    |                  ^^^^^^^^^^^^^^^^----- argument #2 is missing
+    |
+note: associated function defined here
+   --> C:\Users\Cash4\.cargo\git\checkouts\plonky3-7d8a3b21a665a86f\6374a36\uni-stark\src\config.rs:58:18
+    |
+ 58 |     pub const fn new(pcs: Pcs, challenger: Challenger) -> Self {
+    |                  ^^^
+help: provide the argument
+    |
+113 |     let config = StarkConfig::new(pcs, /* challenger */);
+    |                                      ++++++++++++++++++
+
+Some errors have detailed explanations: E0061, E0107, E0277, E0282, E0432, E0599.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `zkp-postcard` (bin "zkp-postcard") due to 13 previous errors
