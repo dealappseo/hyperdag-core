@@ -35,7 +35,34 @@ on-chain reputation (ERC standards compatible).
 [Read the methodology →](METHODOLOGY.md)
 [View live benchmark →](https://trustrepid.dev/hal)
 [Reproduce the benchmark →](docs/BENCHMARK_RESULTS.md)
+[Custodian accountability →](docs/CUSTODIAN_ACCOUNTABILITY.md)
 [Open an issue →](https://github.com/DealAppSeo/hyperdag-core/issues)
+
+---
+
+## Technical Stack
+
+**Core infrastructure:**
+- Rust — performance-critical services, ZKP proof generation
+- Plonky3 — STARK-based zero-knowledge proofs (BabyBear field,
+  Poseidon2 hash, no trusted setup required)
+- TypeScript/Node.js — API layer, agent runtime
+- Python — ANFIS training, signal processing (py-brain)
+
+**Privacy architecture:**
+ZKP (zero-knowledge proofs) are the cryptographic bridge
+between human custodians and AI agents. A custodian's identity
+is never publicly revealed — only a ZKP proof of their
+accountability tier is on-chain. Identity is disclosed only
+under defined conditions (see
+[docs/CUSTODIAN_ACCOUNTABILITY.md](docs/CUSTODIAN_ACCOUNTABILITY.md)).
+
+**Why Rust + Plonky3:**
+Plonky3 STARKs provide post-quantum security with no trusted
+setup. The proving system runs in Rust for the performance
+required to generate proofs at production decision latency.
+The zkp-postcard service (`hyperdag-core/services/zkp-postcard`)
+implements this in production.
 
 ---
 

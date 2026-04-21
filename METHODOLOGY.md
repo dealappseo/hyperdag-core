@@ -1,5 +1,5 @@
 # HAL Methodology: Pythagorean Comma Dissonance Detection
-## Hallucination Assurance Layer — Technical Specification
+## Hallucination Assessment Layer — Technical Specification
 ### HyperDAG Protocol | Version 1.0 | April 2026
 
 ---
@@ -39,22 +39,62 @@ development frontier. We publish the baseline honestly.
 
 ---
 
+## Technical Stack
+
+**Core infrastructure:**
+- Rust — performance-critical services, ZKP proof generation
+- Plonky3 — STARK-based zero-knowledge proofs (BabyBear field,
+  Poseidon2 hash, no trusted setup required)
+- TypeScript/Node.js — API layer, agent runtime
+- Python — ANFIS training, signal processing (py-brain)
+
+**Privacy architecture:**
+ZKP (zero-knowledge proofs) are the cryptographic bridge
+between human custodians and AI agents. A custodian's identity
+is never publicly revealed — only a ZKP proof of their
+accountability tier is on-chain. Identity is disclosed only
+under defined conditions (see docs/CUSTODIAN_ACCOUNTABILITY.md).
+
+**Why Rust + Plonky3:**
+Plonky3 STARKs provide post-quantum security with no trusted
+setup. The proving system runs in Rust for the performance
+required to generate proofs at production decision latency.
+The zkp-postcard service (hyperdag-core/services/zkp-postcard)
+implements this in production.
+
+---
+
 ## 1. The Problem We Are Solving
 
 AI agents operating in the agentic economy will make consequential
 decisions: financial recommendations, legal analysis, compliance
-assessments, underwriting judgments. The infrastructure for IDENTITY
+assessments, underwriting judgments, health and wellness
+diagnosis and analysis. The infrastructure for IDENTITY
 of AI agents is emerging (on-chain registration, ERC standards).
 The infrastructure for TRUST — verifiable behavioral reputation
 that cannot be transferred or gamed — does not yet exist at scale.
 
-RepID is our attempt to build that layer. HAL is the detection
-mechanism that makes RepID honest: it catches when an agent is
-overreaching its evidence, operating outside its domain, or claiming
-certainty it hasn't earned.
+RepID is our attempt to build that layer (for AI agents, and humans
+who wish to participate and contribute to the ecosystem, and/or own
+and train agents — thus being responsible for, but also reaping the
+benefits of their agents' performance — as their custodians).
+HAL (Hallucination Assessment Layer) is the detection mechanism
+that makes RepID honest: it catches when an agent is overreaching
+its evidence, operating outside its domain, or claiming certainty
+it hasn't earned.
+
+An AI hallucination is when an AI system states something
+confidently, as if true, that is not true. HAL is built to detect
+that specific failure mode.
 
 We are not claiming to have solved this. We are publishing our
 working approach and asking the community to help improve it.
+
+A note on custodian accountability: ZKP proofs link every
+agent to a verified human custodian without revealing that
+custodian publicly. When harm occurs, the ZKP proof is the
+key to accountability. See docs/CUSTODIAN_ACCOUNTABILITY.md
+for the full disclosure framework.
 
 ---
 
