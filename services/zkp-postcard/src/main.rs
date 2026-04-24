@@ -70,7 +70,31 @@ struct HealthResponse {
     service: String,
     version: String,
     proof_types: Vec<String>,
+    endpoints: Vec<String>,
     protocol: String,
+}
+
+#[derive(Deserialize)]
+struct VerifyStatelessRequest {
+    commitment: String,
+    #[serde(default)]
+    proof: Option<String>,
+    #[serde(default)]
+    public_inputs: Option<serde_json::Value>,
+}
+
+#[derive(Serialize)]
+struct VerifyStatelessResponse {
+    valid: bool,
+    proof_type: String,
+    verified_at: String,
+    note: String,
+}
+
+#[derive(Serialize)]
+struct NotFoundBody {
+    error: String,
+    hint: String,
 }
 
 fn get_agent_repid(agent_id: &str) -> Option<u64> {
@@ -102,10 +126,16 @@ async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "healthy".into(),
         service: "zkp-postcard".into(),
-        version: "0.2.0".into(),
+        version: "0.3.0".into(),
         proof_types: vec![
             "plonky3_range_check".into(),
             "sha256_commitment_poc".into(),
+        ],
+        endpoints: vec![
+            "/health".into(),
+            "/zkp/repid-proof".into(),
+            "/zkp/verify".into(),
+            "/zkp/verify/{commitment}".into(),
         ],
         protocol: "HyperDAG Trust Protocol v1".into(),
     })
@@ -175,9 +205,15 @@ async fn generate_proof(
 async fn verify_proof(
     State(store): State<Store>,
     Path(commitment): Path<String>,
-) -> Result<Json<VerifyResponse>, StatusCode> {
+) -> Result<Json<VerifyResponse>, (StatusCode, Json<NotFoundBody>)> {
     let records = store.read().await;
-    let record = records.get(&commitment).ok_or(StatusCode::NOT_FOUND)?;
+    let record = records.get(&commitment).ok_or_else(|| (
+        StatusCode::NOT_FOUND,
+        Json(NotFoundBody {
+            error: "commitment not found in current in-memory store".into(),
+            hint: "In-memory store does not survive container restarts or span replicas. For stateless verification provide proof + public_inputs to POST /zkp/verify (Sprint-3: full Plonky3 proof serialization).".into(),
+        }),
+    ))?;
 
     Ok(Json(VerifyResponse {
         valid: record.verified,
@@ -186,6 +222,31 @@ async fn verify_proof(
         proof_type: record.proof_type.clone(),
         protocol: "HyperDAG Trust Protocol v1".into(),
     }))
+}
+
+async fn verify_stateless(
+    State(store): State<Store>,
+    Json(req): Json<VerifyStatelessRequest>,
+) -> Result<Json<VerifyStatelessResponse>, (StatusCode, Json<NotFoundBody>)> {
+    let records = store.read().await;
+    if let Some(record) = records.get(&req.commitment) {
+        // Touch optional fields so unused-variable lints stay quiet while keeping the
+        // forward-compatible API surface for Sprint-3 stateless verification.
+        let _ = (&req.proof, &req.public_inputs);
+        return Ok(Json(VerifyStatelessResponse {
+            valid: record.verified,
+            proof_type: record.proof_type.clone(),
+            verified_at: chrono::Utc::now().to_rfc3339(),
+            note: "lookup-based verification against in-memory store (not cryptographic re-verify)".into(),
+        }));
+    }
+    Err((
+        StatusCode::NOT_IMPLEMENTED,
+        Json(NotFoundBody {
+            error: "stateless proof verification not yet implemented".into(),
+            hint: "commitment was not found in the current container's in-memory store. Cryptographic re-verification from serialized Plonky3 proof + public_inputs is Sprint-3 scope; current zkp-postcard v0.3.0 supports only in-session lookup.".into(),
+        }),
+    ))
 }
 
 #[tokio::main]
@@ -199,12 +260,13 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(health))
         .route("/zkp/repid-proof", post(generate_proof))
+        .route("/zkp/verify", post(verify_stateless))
         .route("/zkp/verify/{commitment}", get(verify_proof))
         .layer(CorsLayer::permissive())
         .with_state(store);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    println!("ZKP Postcard v0.2.0 listening on {}", addr);
+    println!("ZKP Postcard v0.3.0 listening on {}", addr);
     println!("Plonky3 STARK range-check (BabyBear field)");
     println!("HyperDAG Trust Protocol v1");
 
