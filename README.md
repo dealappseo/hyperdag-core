@@ -1,70 +1,33 @@
-## HyperDAG Protocol — Ethical Trust Layer for the Agentic Economy
+# hyperdag-core
 
-AI agents are entering the economy. They will make financial
-recommendations, legal analyses, compliance assessments. The
-infrastructure for agent IDENTITY is emerging. The infrastructure
-for TRUST — verifiable behavioral reputation that cannot be
-transferred or gamed — does not yet exist at scale.
+Core ZKP Pipelines and Primitives
 
-This repository is our working attempt to build that layer.
 
-We are not claiming to have the answers. We are publishing our
-working methodology and asking the community to help improve it.
-Ideas for or against our approach are equally welcome.
-Contributions of any kind are always appreciated.
+## HyperDAG Ecosystem
 
-**What this is:**
-A protocol and standard, not a product. Open source. Open methodology.
-Grounded in mathematical constants (Pythagorean Comma), constitutional
-ethics (Micah 6:8, Philippians 4:8, Golden Rule), and verifiable
-on-chain reputation (ERC standards compatible).
+```mermaid
+graph TD
+    classDef current fill:#2d3748,stroke:#63b3ed,stroke-width:4px,color:#fff;
+    classDef default fill:#edf2f7,stroke:#4a5568,stroke-width:2px,color:#1a202c;
 
-**Current status:**
-| Metric | Value |
-|--------|-------|
-| Production decisions scored | 316 |
-| Total system vetoes | 361 |
-| ZKP vetoes | 298 |
-| CLAIM_REJECTED verdicts | 3 |
-| Agent-layer catches | 60 |
-| False positive vetoes | 0 |
-| ERC-compatible agents on-chain | 4 |
-| TruthfulQA F1 (baseline) | [run April 2026] |
+    Protocol["hyperdag-protocol<br/>(L1 Specification)"]
+    Core["hyperdag-core<br/>(ZKP Pipeline)"]
+    Symphony["trinity-symphony-shared<br/>(Agent Infrastructure)"]
+    Repid["repid<br/>(Reputation Engine)"]
+    Trustrepid["trustrepid<br/>(SDK & Client)"]
 
-**Links:**
-[Read the methodology →](METHODOLOGY.md)
-[View live benchmark →](https://trustrepid.dev/hal)
-[Reproduce the benchmark →](docs/BENCHMARK_RESULTS.md)
-[Custodian accountability →](docs/CUSTODIAN_ACCOUNTABILITY.md)
-[Open an issue →](https://github.com/DealAppSeo/hyperdag-core/issues)
+    Protocol --> Core
+    Core --> Repid
+    Repid --> Symphony
+    Repid --> Trustrepid
+    
+    class Core current;
+```
 
----
 
-## Technical Stack
+## Overview
+This repository is part of the HyperDAG ecosystem.
+Please see [CC's Specification Docs](/spec/SBT-MINTING-FLOW.md) (placeholder) for detailed architecture flows.
 
-**Core infrastructure:**
-- Rust — performance-critical services, ZKP proof generation
-- Plonky3 — STARK-based zero-knowledge proofs (BabyBear field,
-  Poseidon2 hash, no trusted setup required)
-- TypeScript/Node.js — API layer, agent runtime
-- Python — ANFIS training, signal processing (py-brain)
-
-**Privacy architecture:**
-ZKP (zero-knowledge proofs) are the cryptographic bridge
-between human custodians and AI agents. A custodian's identity
-is never publicly revealed — only a ZKP proof of their
-accountability tier is on-chain. Identity is disclosed only
-under defined conditions (see
-[docs/CUSTODIAN_ACCOUNTABILITY.md](docs/CUSTODIAN_ACCOUNTABILITY.md)).
-
-**Why Rust + Plonky3:**
-Plonky3 STARKs provide post-quantum security with no trusted
-setup. The proving system runs in Rust for the performance
-required to generate proofs at production decision latency.
-The zkp-postcard service (`hyperdag-core/services/zkp-postcard`)
-implements this in production.
-
----
-
-*Contributions, critiques, and alternative approaches are welcome.*
-*This work is better with more perspectives, not fewer.*
+## Getting Started
+Please see `.github/CONTRIBUTING.md` for setup.
