@@ -1,0 +1,152 @@
+[
+  {
+    "name": "Threshold Met Cleanly",
+    "description": "R=8500, T=7000",
+    "witness": {
+      "repid": 8500,
+      "nonce": "0x0202020202020202020202020202020202020202020202020202020202020202",
+      "holder_address": "0x0101010101010101010101010101010101010101"
+    },
+    "public_signals": {
+      "threshold": 7000,
+      "commitment": "0x30b6a249f891a9e761134240beda373eb814f2b79c13868f990610f789485044"
+    },
+    "expected_proof_hash": "plonky3_stark_babybear_repid_threshold_7000_verified_ok",
+    "expected_verify_result": true
+  },
+  {
+    "name": "Threshold Not Met",
+    "description": "R=6500, T=7000",
+    "witness": {
+      "repid": 6500,
+      "nonce": "0x0202020202020202020202020202020202020202020202020202020202020202",
+      "holder_address": "0x0101010101010101010101010101010101010101"
+    },
+    "public_signals": {
+      "threshold": 7000,
+      "commitment": "0x30b6a249f891a9e761134240beda373eb814f2b79c13868f990610f789485044"
+    },
+    "expected_proof_hash": "",
+    "expected_verify_result": false
+  },
+  {
+    "name": "Boundary Exact",
+    "description": "R=7000, T=7000",
+    "witness": {
+      "repid": 7000,
+      "nonce": "0x0202020202020202020202020202020202020202020202020202020202020202",
+      "holder_address": "0x0101010101010101010101010101010101010101"
+    },
+    "public_signals": {
+      "threshold": 7000,
+      "commitment": "0x30b6a249f891a9e761134240beda373eb814f2b79c13868f990610f789485044"
+    },
+    "expected_proof_hash": "plonky3_stark_babybear_repid_threshold_7000_verified_ok",
+    "expected_verify_result": true
+  },
+  {
+    "name": "Out of Bounds R",
+    "description": "R=10001, T=7000",
+    "witness": {
+      "repid": 10001,
+      "nonce": "0x0202020202020202020202020202020202020202020202020202020202020202",
+      "holder_address": "0x0101010101010101010101010101010101010101"
+    },
+    "public_signals": {
+      "threshold": 7000,
+      "commitment": "0x30b6a249f891a9e761134240beda373eb814f2b79c13868f990610f789485044"
+    },
+    "expected_proof_hash": "",
+    "expected_verify_result": false
+  },
+  {
+    "name": "Forged Commitment",
+    "description": "R=8500, T=7000 with tampered commitment",
+    "witness": {
+      "repid": 8500,
+      "nonce": "0x0202020202020202020202020202020202020202020202020202020202020202",
+      "holder_address": "0x0101010101010101010101010101010101010101"
+    },
+    "public_signals": {
+      "threshold": 7000,
+      "commitment": "0xffb6a249f891a9e761134240beda373eb814f2b79c13868f990610f789485044"
+    },
+    "expected_proof_hash": "",
+    "expected_verify_result": false
+  },
+  {
+    "name": "High Threshold Met",
+    "description": "R=9999, T=9000",
+    "witness": {
+      "repid": 9999,
+      "nonce": "0x0202020202020202020202020202020202020202020202020202020202020202",
+      "holder_address": "0x0101010101010101010101010101010101010101"
+    },
+    "public_signals": {
+      "threshold": 9000,
+      "commitment": "0x30b6a249f891a9e761134240beda373eb814f2b79c13868f990610f789485044"
+    },
+    "expected_proof_hash": "plonky3_stark_babybear_repid_threshold_9000_verified_ok",
+    "expected_verify_result": true
+  },
+  {
+    "name": "Zero Threshold",
+    "description": "R=5000, T=0",
+    "witness": {
+      "repid": 5000,
+      "nonce": "0x0202020202020202020202020202020202020202020202020202020202020202",
+      "holder_address": "0x0101010101010101010101010101010101010101"
+    },
+    "public_signals": {
+      "threshold": 0,
+      "commitment": "0x30b6a249f891a9e761134240beda373eb814f2b79c13868f990610f789485044"
+    },
+    "expected_proof_hash": "plonky3_stark_babybear_repid_threshold_0_verified_ok",
+    "expected_verify_result": true
+  },
+  {
+    "name": "Zero R",
+    "description": "R=0, T=0",
+    "witness": {
+      "repid": 0,
+      "nonce": "0x0202020202020202020202020202020202020202020202020202020202020202",
+      "holder_address": "0x0101010101010101010101010101010101010101"
+    },
+    "public_signals": {
+      "threshold": 0,
+      "commitment": "0x30b6a249f891a9e761134240beda373eb814f2b79c13868f990610f789485044"
+    },
+    "expected_proof_hash": "plonky3_stark_babybear_repid_threshold_0_verified_ok",
+    "expected_verify_result": true
+  },
+  {
+    "name": "Max Valid R",
+    "description": "R=10000, T=10000",
+    "witness": {
+      "repid": 10000,
+      "nonce": "0x0202020202020202020202020202020202020202020202020202020202020202",
+      "holder_address": "0x0101010101010101010101010101010101010101"
+    },
+    "public_signals": {
+      "threshold": 10000,
+      "commitment": "0x30b6a249f891a9e761134240beda373eb814f2b79c13868f990610f789485044"
+    },
+    "expected_proof_hash": "plonky3_stark_babybear_repid_threshold_10000_verified_ok",
+    "expected_verify_result": true
+  },
+  {
+    "name": "Different Holder",
+    "description": "Valid but for another holder",
+    "witness": {
+      "repid": 8500,
+      "nonce": "0x0202020202020202020202020202020202020202020202020202020202020202",
+      "holder_address": "0x0303030303030303030303030303030303030303"
+    },
+    "public_signals": {
+      "threshold": 7000,
+      "commitment": "0x150a9b3c8c473a9a459fcb3f4893aba7afa6c41754d2952e9dfaf52bccc68f97"
+    },
+    "expected_proof_hash": "plonky3_stark_babybear_repid_threshold_7000_verified_ok",
+    "expected_verify_result": true
+  }
+]
