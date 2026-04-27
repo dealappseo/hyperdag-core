@@ -1,15 +1,5 @@
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_air::WindowAccess;
-// Plonky3 STARK Range-Check Circuit for RepID Verification
-//
-// Proves that a value fits within a 32-bit unsigned integer range.
-// To prove "RepID > threshold": diff = repid - threshold - 1
-// prove(diff fits in u32) => repid > threshold
-//
-// Field: BabyBear (p = 2^31 - 2^27 + 1)
-// Hash: Keccak256
-// FRI: log_blowup=2, 28 queries, 8-bit PoW
-
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_baby_bear::BabyBear;
 use p3_commit::ExtensionMmcs;
@@ -23,15 +13,15 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_monty_31::dft::RecursiveDft;
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
 use p3_uni_stark::{prove, verify, StarkConfig};
+use sha2::{Digest, Sha256};
 
-/// AIR for range-checking a 32-bit value.
 pub struct RepIdRangeCheckAir {
-    pub value: u32,
+    pub threshold: u32,
 }
 
 impl<F: Field> BaseAir<F> for RepIdRangeCheckAir {
     fn width(&self) -> usize {
-        32
+        42 // 14 for R, 14 for R - T, 14 for 10000 - R
     }
 }
 
@@ -40,50 +30,81 @@ impl<AB: AirBuilder> Air<AB> for RepIdRangeCheckAir where AB::F: Field {
         let main = builder.main();
         let row = main.current_slice();
 
-        // MSB must be zero (value < 2^31)
-        builder.assert_eq(row[0], AB::Expr::ZERO);
-
-        // BabyBear modulus guard
-        let upper_product = row[1..5]
-            .iter()
-            .map(|&bit: &AB::Var| bit.into())
-            .product::<AB::Expr>();
-        let remaining_sum = row[5..32]
-            .iter()
-            .map(|&bit: &AB::Var| bit.into())
-            .sum::<AB::Expr>();
-        builder.when(upper_product).assert_zero(remaining_sum);
-
-        // Reconstruct value from bits and verify
-        let mut reconstructed = AB::Expr::ZERO;
-        for i in 0..32 {
+        // 1. Reconstruct R from first 14 bits
+        let mut r = AB::Expr::ZERO;
+        for i in 0..14 {
             let bit = row[i];
-            builder.assert_bool(bit);
-            reconstructed += AB::Expr::from_u32(1 << (31 - i)) * bit;
+            builder.assert_bool(bit.clone());
+            r += AB::Expr::from_u32(1 << i) * bit;
         }
-        builder
-            .when_first_row()
-            .assert_eq(AB::Expr::from_u32(self.value), reconstructed);
+
+        // 2. Reconstruct (R - T) from next 14 bits
+        // Spec line 66: R >= T (Threshold check)
+        let mut diff = AB::Expr::ZERO;
+        for i in 0..14 {
+            let bit = row[14 + i];
+            builder.assert_bool(bit.clone());
+            diff += AB::Expr::from_u32(1 << i) * bit;
+        }
+        builder.when_first_row().assert_eq(diff, r.clone() - AB::Expr::from_u32(self.threshold));
+
+        // 3. Reconstruct (10000 - R) from next 14 bits
+        // Spec line 63: 0 <= R <= 10000 (Range check)
+        let mut upper = AB::Expr::ZERO;
+        for i in 0..14 {
+            let bit = row[28 + i];
+            builder.assert_bool(bit.clone());
+            upper += AB::Expr::from_u32(1 << i) * bit;
+        }
+        builder.when_first_row().assert_eq(upper, AB::Expr::from_u32(10000) - r);
+
+        // Spec Line 68: C == H(holder_address || nonce) (commitment opening)
+        // FIXME: Missing in-circuit Keccak/Poseidon hash constraint. 
+        // Plonky3 requires multi-table VM for cryptographic hashes. 
+        // Currently this is checked out-of-circuit by the prover before witness generation.
     }
 }
 
-/// Generate the execution trace: decompose value into 32 bits (big-endian)
-fn generate_trace<F: Field>(value: u32) -> RowMajorMatrix<F> {
-    let mut bits = Vec::with_capacity(32);
-    for i in (0..32).rev() {
-        if (value & (1 << i)) != 0 {
-            bits.push(F::ONE);
-        } else {
-            bits.push(F::ZERO);
-        }
-    }
-    RowMajorMatrix::new(bits, 32)
+fn generate_trace<F: Field>(repid: u32, threshold: u32) -> RowMajorMatrix<F> {
+    // Generate trace with at least 2 rows (power of 2)
+    let diff = repid - threshold;
+    let upper = 10000 - repid;
+    let mut row = Vec::with_capacity(42);
+    for i in 0..14 { row.push(F::from_bool((repid & (1 << i)) != 0)); }
+    for i in 0..14 { row.push(F::from_bool((diff & (1 << i)) != 0)); }
+    for i in 0..14 { row.push(F::from_bool((upper & (1 << i)) != 0)); }
+
+    // Duplicate row to make trace height = 2
+    let mut trace_values = row.clone();
+    trace_values.extend(row);
+    RowMajorMatrix::new(trace_values, 42)
 }
 
-/// Prove that `value` fits in a u32 using Plonky3 STARK (BabyBear field).
-/// New Plonky3 API: prove(config, air, trace, public_values) -> Proof
-/// verify(config, air, &proof, public_values) -> Result<(), VerificationError>
-pub fn prove_range_check(value: u32) -> Result<Vec<u8>, String> {
+pub fn prove_repid_threshold(
+    repid: u32,
+    threshold: u32,
+    holder_address: [u8; 20],
+    nonce: [u8; 32],
+    expected_commitment: [u8; 32],
+) -> Result<Vec<u8>, String> {
+    // Check bounds out-of-circuit first so prover fails gracefully on invalid witness
+    if repid > 10000 {
+        return Err("R > 10000".into());
+    }
+    if repid < threshold {
+        return Err("R < T".into());
+    }
+
+    // Spec Line 68: C == H(...) (Out of circuit check, see FIXME in eval)
+    let mut hasher = Sha256::new();
+    hasher.update(&holder_address);
+    hasher.update(&nonce);
+    let mut actual_commitment = [0u8; 32];
+    actual_commitment.copy_from_slice(&hasher.finalize());
+    if actual_commitment != expected_commitment {
+        return Err("commitment_mismatch".into());
+    }
+
     type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
     type ByteHash = Keccak256Hash;
@@ -100,8 +121,8 @@ pub fn prove_range_check(value: u32) -> Result<Vec<u8>, String> {
     let val_mmcs = ValMmcs::new(field_hash, compress, 0);
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
-    let air = RepIdRangeCheckAir { value };
-    let trace = generate_trace::<Val>(value);
+    let air = RepIdRangeCheckAir { threshold };
+    let trace = generate_trace::<Val>(repid, threshold);
 
     let fri_config = FriConfig {
         log_blowup: 2,
@@ -112,20 +133,29 @@ pub fn prove_range_check(value: u32) -> Result<Vec<u8>, String> {
 
     let dft = Dft::new(trace.height() << fri_config.log_blowup);
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
-    let mut challenger = SerializingChallenger32::new(HashChallenger::<u8, ByteHash, 32>::new(vec![], byte_hash.clone()));
+    let challenger = SerializingChallenger32::new(HashChallenger::<u8, ByteHash, 32>::new(vec![], byte_hash.clone()));
     let config = StarkConfig::new(pcs, challenger);
 
-    // New API: no challenger arg, returns Proof directly
     let proof = prove(&config, &air, trace, &vec![]);
 
-    // Verify immediately
     verify(&config, &air, &proof, &vec![])
         .map_err(|e| format!("Verify failed: {:?}", e))?;
 
-    // Return a proof indicator (full serialization requires serde on Proof<SC>)
     let proof_bytes = format!(
-        "plonky3_stark_babybear_rangecheck_value_{}_verified_ok",
-        value
+        "plonky3_stark_babybear_repid_threshold_{}_verified_ok",
+        threshold
     );
     Ok(proof_bytes.into_bytes())
+}
+
+// Backward compat for main.rs which calls prove_range_check
+pub fn prove_range_check(value: u32) -> Result<Vec<u8>, String> {
+    let holder = [0u8; 20];
+    let nonce = [0u8; 32];
+    let mut hasher = Sha256::new();
+    hasher.update(holder);
+    hasher.update(nonce);
+    let mut c = [0u8; 32];
+    c.copy_from_slice(&hasher.finalize());
+    prove_repid_threshold(value + 1, 0, holder, nonce, c) // mock mapping
 }
