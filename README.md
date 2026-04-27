@@ -31,6 +31,8 @@ on-chain reputation (ERC standards compatible).
 | ERC-compatible agents on-chain | 4 |
 | TruthfulQA F1 (baseline) | [run April 2026] |
 
+*ZKP Circuit Status (2026-04-27 Audit)*: `rep_id_threshold`, `earned_repid`, and `perceived_repid` circuits are implemented in Rust. `combined_repid` is scoped to v0.2 pending Plonky3 recursive verification. Missing Plonky3 cryptographic hash (Poseidon2/Keccak) VM integration means commitment verification is currently checked out-of-circuit by the prover before generating the execution trace. Benchmarks are currently unavailable due to CI runner disk-space constraints (`os error 112`). On-chain verifier test scaffolding uses an RPC mock until the real ABI is integrated.
+
 **Links:**
 [Read the methodology →](METHODOLOGY.md)
 [View live benchmark →](https://trustrepid.dev/hal)
