@@ -1,0 +1,167 @@
+[
+  {
+    "vector_id": "anti-gaming-A1",
+    "category": "self-dealing",
+    "description": "Agent appears in own trade participants",
+    "circuit": "trade_auth",
+    "expected_result": "reject",
+    "expected_error_code": "SELF_DEALING_DETECTED",
+    "public_inputs": { "agent_id": 1, "builder_id": 1 },
+    "private_inputs": { "agent_repid": 8000 },
+    "rejection_proof": "no valid witness — out of circuit check prevents witness generation if agent is participant"
+  },
+  {
+    "vector_id": "anti-gaming-A2",
+    "category": "self-dealing",
+    "description": "Agent is validator and actor",
+    "circuit": "trade_auth",
+    "expected_result": "reject",
+    "expected_error_code": "SELF_DEALING_DETECTED",
+    "public_inputs": { "agent_id": 1, "builder_id": 1 },
+    "private_inputs": { "agent_repid": 8000 },
+    "rejection_proof": "no valid witness — out of circuit check prevents witness generation if agent is validator"
+  },
+  {
+    "vector_id": "anti-gaming-A3",
+    "category": "self-dealing",
+    "description": "Agent is in oracle signing committee",
+    "circuit": "trade_auth",
+    "expected_result": "reject",
+    "expected_error_code": "SELF_DEALING_DETECTED",
+    "public_inputs": { "agent_id": 1, "builder_id": 1 },
+    "private_inputs": { "agent_repid": 8000 },
+    "rejection_proof": "no valid witness — out of circuit check prevents witness generation"
+  },
+  {
+    "vector_id": "anti-gaming-B1",
+    "category": "anti-prediction",
+    "description": "Prediction contradicts bet direction",
+    "circuit": "linked_bet",
+    "expected_result": "reject",
+    "expected_error_code": "CONTRADICTORY_PREDICTION",
+    "public_inputs": { "actual_outcome": 1 },
+    "private_inputs": { "bet_amount": 1000 },
+    "rejection_proof": "no valid witness — prediction alignment check fails"
+  },
+  {
+    "vector_id": "anti-gaming-B2",
+    "category": "anti-prediction",
+    "description": "Stated confidence positive but bet negative",
+    "circuit": "linked_bet",
+    "expected_result": "reject",
+    "expected_error_code": "CONTRADICTORY_PREDICTION",
+    "public_inputs": { "actual_outcome": 0 },
+    "private_inputs": { "bet_amount": 1000 },
+    "rejection_proof": "no valid witness — prediction alignment check fails"
+  },
+  {
+    "vector_id": "anti-gaming-B3",
+    "category": "anti-prediction",
+    "description": "Bullish thesis, bearish bet",
+    "circuit": "linked_bet",
+    "expected_result": "reject",
+    "expected_error_code": "CONTRADICTORY_PREDICTION",
+    "public_inputs": { "actual_outcome": 0 },
+    "private_inputs": { "bet_amount": 1000 },
+    "rejection_proof": "no valid witness — prediction alignment check fails"
+  },
+  {
+    "vector_id": "anti-gaming-C1",
+    "category": "sandbagging",
+    "description": "Claimed confidence inconsistent with history",
+    "circuit": "linked_bet",
+    "expected_result": "comma_penalty",
+    "expected_error_code": "NONE",
+    "public_inputs": { "claimed_confidence": 5000, "actual_outcome": 1, "token_delta": 500, "repid_delta": 40 },
+    "private_inputs": { "bet_amount": 1000, "pythagorean_comma_applied": true },
+    "rejection_proof": "Penalty applied to RepID delta via 80/100 factor"
+  },
+  {
+    "vector_id": "anti-gaming-C2",
+    "category": "sandbagging",
+    "description": "50% claimed on 10 bets, 95% on current",
+    "circuit": "linked_bet",
+    "expected_result": "comma_penalty",
+    "expected_error_code": "NONE",
+    "public_inputs": { "claimed_confidence": 9500, "actual_outcome": 0, "token_delta": -950, "repid_delta": -76 },
+    "private_inputs": { "bet_amount": 1000, "pythagorean_comma_applied": true },
+    "rejection_proof": "Penalty applied to RepID delta via 80/100 factor"
+  },
+  {
+    "vector_id": "anti-gaming-C3",
+    "category": "sandbagging",
+    "description": "Strategic understatement reveals pattern",
+    "circuit": "linked_bet",
+    "expected_result": "comma_penalty",
+    "expected_error_code": "NONE",
+    "public_inputs": { "claimed_confidence": 5000, "actual_outcome": 1, "token_delta": 500, "repid_delta": 40 },
+    "private_inputs": { "bet_amount": 1000, "pythagorean_comma_applied": true },
+    "rejection_proof": "Penalty applied to RepID delta via 80/100 factor"
+  },
+  {
+    "vector_id": "anti-gaming-D1",
+    "category": "sybil_cohort",
+    "description": "50 agents owned by single builder, half opposing positions",
+    "circuit": "trade_auth",
+    "expected_result": "reject",
+    "expected_error_code": "BUILDER_BELOW_FLOOR",
+    "public_inputs": { "threshold_combined_score": 1000, "trade_amount": 18000 },
+    "private_inputs": { "builder_repid": 4900, "agent_repid": 8000, "builder_stake": 10000 },
+    "rejection_proof": "constraint violation at builder_repid >= 5000"
+  },
+  {
+    "vector_id": "anti-gaming-D2",
+    "category": "sybil_cohort",
+    "description": "Builder repid drops below floor due to losing drag",
+    "circuit": "trade_auth",
+    "expected_result": "reject",
+    "expected_error_code": "BUILDER_BELOW_FLOOR",
+    "public_inputs": { "threshold_combined_score": 1000, "trade_amount": 18000 },
+    "private_inputs": { "builder_repid": 4999, "agent_repid": 8000, "builder_stake": 10000 },
+    "rejection_proof": "constraint violation at builder_repid >= 5000"
+  },
+  {
+    "vector_id": "anti-gaming-D3",
+    "category": "sybil_cohort",
+    "description": "All 50 agents lose authority when builder_repid < 5000",
+    "circuit": "trade_auth",
+    "expected_result": "reject",
+    "expected_error_code": "BUILDER_BELOW_FLOOR",
+    "public_inputs": { "threshold_combined_score": 1000, "trade_amount": 18000 },
+    "private_inputs": { "builder_repid": 4000, "agent_repid": 8000, "builder_stake": 10000 },
+    "rejection_proof": "constraint violation at builder_repid >= 5000"
+  },
+  {
+    "vector_id": "anti-gaming-E1",
+    "category": "score_stripping",
+    "description": "Positive token_delta + negative repid_delta",
+    "circuit": "linked_bet",
+    "expected_result": "reject",
+    "expected_error_code": "SCORE_STRIPPING_DETECTED",
+    "public_inputs": { "actual_outcome": 1, "token_delta": 800, "repid_delta": -80 },
+    "private_inputs": { "bet_amount": 1000, "pythagorean_comma_applied": false },
+    "rejection_proof": "constraint violation: token_is_positive == actual_outcome AND repid_is_positive == actual_outcome"
+  },
+  {
+    "vector_id": "anti-gaming-E2",
+    "category": "score_stripping",
+    "description": "Negative token_delta + positive repid_delta",
+    "circuit": "linked_bet",
+    "expected_result": "reject",
+    "expected_error_code": "SCORE_STRIPPING_DETECTED",
+    "public_inputs": { "actual_outcome": 0, "token_delta": -800, "repid_delta": 80 },
+    "private_inputs": { "bet_amount": 1000, "pythagorean_comma_applied": false },
+    "rejection_proof": "constraint violation: token_is_positive == actual_outcome AND repid_is_positive == actual_outcome"
+  },
+  {
+    "vector_id": "anti-gaming-E3",
+    "category": "score_stripping",
+    "description": "Zero token_delta + non-zero repid_delta",
+    "circuit": "linked_bet",
+    "expected_result": "reject",
+    "expected_error_code": "SCORE_STRIPPING_DETECTED",
+    "public_inputs": { "actual_outcome": 1, "token_delta": 0, "repid_delta": 80 },
+    "private_inputs": { "bet_amount": 1000, "pythagorean_comma_applied": false },
+    "rejection_proof": "constraint violation: proportional scaling requires |token_delta| * 10000 == bet_amount * confidence"
+  }
+]

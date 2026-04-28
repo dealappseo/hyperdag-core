@@ -9,15 +9,62 @@ mod circuit;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    response::Json,
+    response::{IntoResponse, Json},
     routing::{get, post},
     Router,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Instant};
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Instant,
+};
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
+
+const SERVICE_VERSION: &str = "0.1.0";
+
+#[derive(Clone)]
+struct AppState {
+    store: Store,
+    metrics: Arc<Metrics>,
+}
+
+struct Metrics {
+    started_at: Instant,
+    proofs_generated_total: AtomicU64,
+    proofs_failed_total: AtomicU64,
+}
+
+impl Metrics {
+    fn new() -> Self {
+        Self {
+            started_at: Instant::now(),
+            proofs_generated_total: AtomicU64::new(0),
+            proofs_failed_total: AtomicU64::new(0),
+        }
+    }
+    fn uptime_seconds(&self) -> u64 {
+        self.started_at.elapsed().as_secs()
+    }
+    fn generated(&self) -> u64 {
+        self.proofs_generated_total.load(Ordering::Relaxed)
+    }
+    fn failed(&self) -> u64 {
+        self.proofs_failed_total.load(Ordering::Relaxed)
+    }
+    fn inc_generated(&self) {
+        self.proofs_generated_total.fetch_add(1, Ordering::Relaxed);
+    }
+    fn inc_failed(&self) {
+        self.proofs_failed_total.fetch_add(1, Ordering::Relaxed);
+    }
+}
 
 type Store = Arc<RwLock<HashMap<String, ProofRecord>>>;
 
@@ -67,10 +114,10 @@ struct VerifyResponse {
 #[derive(Serialize)]
 struct HealthResponse {
     status: String,
-    service: String,
+    uptime_seconds: u64,
+    proofs_generated_total: u64,
+    proofs_failed_total: u64,
     version: String,
-    proof_types: Vec<String>,
-    protocol: String,
 }
 
 fn get_agent_repid(agent_id: &str) -> Option<u64> {
@@ -98,26 +145,52 @@ fn sha256_commitment(agent_id: &str, repid: u64, threshold: u64) -> String {
     format!("0x{}", hex::encode(hasher.finalize()))
 }
 
-async fn health() -> Json<HealthResponse> {
+async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     Json(HealthResponse {
-        status: "healthy".into(),
-        service: "zkp-postcard".into(),
-        version: "0.2.0".into(),
-        proof_types: vec![
-            "plonky3_range_check".into(),
-            "sha256_commitment_poc".into(),
-        ],
-        protocol: "HyperDAG Trust Protocol v1".into(),
+        status: "ok".into(),
+        uptime_seconds: state.metrics.uptime_seconds(),
+        proofs_generated_total: state.metrics.generated(),
+        proofs_failed_total: state.metrics.failed(),
+        version: SERVICE_VERSION.into(),
     })
 }
 
+async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
+    let m = &state.metrics;
+    let body = format!(
+        "# HELP plonky3_proofs_generated_total Successful proofs generated\n\
+         # TYPE plonky3_proofs_generated_total counter\n\
+         plonky3_proofs_generated_total {}\n\
+         # HELP plonky3_proofs_failed_total Failed proof attempts\n\
+         # TYPE plonky3_proofs_failed_total counter\n\
+         plonky3_proofs_failed_total {}\n\
+         # HELP plonky3_uptime_seconds Service uptime\n\
+         # TYPE plonky3_uptime_seconds gauge\n\
+         plonky3_uptime_seconds {}\n",
+        m.generated(),
+        m.failed(),
+        m.uptime_seconds(),
+    );
+    (
+        [("content-type", "text/plain; version=0.0.4")],
+        body,
+    )
+}
+
 async fn generate_proof(
-    State(store): State<Store>,
+    State(state): State<AppState>,
     Json(req): Json<ProofRequest>,
 ) -> Result<Json<ProofResponse>, StatusCode> {
+    let store = state.store.clone();
     let agent_id = req.agent_id.unwrap_or_else(|| "3747".into());
     let threshold = req.threshold.unwrap_or(5000);
-    let repid = get_agent_repid(&agent_id).ok_or(StatusCode::NOT_FOUND)?;
+    let repid = match get_agent_repid(&agent_id) {
+        Some(r) => r,
+        None => {
+            state.metrics.inc_failed();
+            return Err(StatusCode::NOT_FOUND);
+        }
+    };
     let above = repid > threshold;
     let tier = req.tier.unwrap_or_else(|| score_to_tier(repid).into());
     let statement = format!("RepID > {}", threshold);
@@ -134,6 +207,7 @@ async fn generate_proof(
             }
             Err(e) => {
                 eprintln!("[ZKP] Plonky3 proof failed ({}), falling back to SHA-256", e);
+                state.metrics.inc_failed();
                 let commitment = sha256_commitment(&agent_id, repid, threshold);
                 ("sha256_commitment_poc".to_string(), commitment, 32)
             }
@@ -142,6 +216,8 @@ async fn generate_proof(
         let commitment = sha256_commitment(&agent_id, repid, threshold);
         ("sha256_commitment_poc".to_string(), commitment, 32)
     };
+
+    state.metrics.inc_generated();
 
     let proving_time = start.elapsed().as_millis() as u64;
 
@@ -173,10 +249,10 @@ async fn generate_proof(
 }
 
 async fn verify_proof(
-    State(store): State<Store>,
+    State(state): State<AppState>,
     Path(commitment): Path<String>,
 ) -> Result<Json<VerifyResponse>, StatusCode> {
-    let records = store.read().await;
+    let records = state.store.read().await;
     let record = records.get(&commitment).ok_or(StatusCode::NOT_FOUND)?;
 
     Ok(Json(VerifyResponse {
@@ -190,7 +266,10 @@ async fn verify_proof(
 
 #[tokio::main]
 async fn main() {
-    let store: Store = Arc::new(RwLock::new(HashMap::new()));
+    let state = AppState {
+        store: Arc::new(RwLock::new(HashMap::new())),
+        metrics: Arc::new(Metrics::new()),
+    };
     let port: u16 = std::env::var("PORT")
         .unwrap_or_else(|_| "8080".into())
         .parse()
@@ -198,15 +277,17 @@ async fn main() {
 
     let app = Router::new()
         .route("/health", get(health))
+        .route("/metrics", get(metrics))
         .route("/zkp/repid-proof", post(generate_proof))
         .route("/zkp/verify/{commitment}", get(verify_proof))
         .layer(CorsLayer::permissive())
-        .with_state(store);
+        .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    println!("ZKP Postcard v0.2.0 listening on {}", addr);
+    println!("ZKP Postcard v{} listening on {}", SERVICE_VERSION, addr);
     println!("Plonky3 STARK range-check (BabyBear field)");
     println!("HyperDAG Trust Protocol v1");
+    println!("Observability: GET /health, GET /metrics");
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
