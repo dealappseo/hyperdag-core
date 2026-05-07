@@ -38,6 +38,7 @@ struct ProofRequest {
     agent_id: Option<String>,
     threshold: Option<u64>,
     tier: Option<String>,
+    repid_score: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -117,7 +118,9 @@ async fn generate_proof(
 ) -> Result<Json<ProofResponse>, StatusCode> {
     let agent_id = req.agent_id.unwrap_or_else(|| "3747".into());
     let threshold = req.threshold.unwrap_or(5000);
-    let repid = get_agent_repid(&agent_id).ok_or(StatusCode::NOT_FOUND)?;
+    let repid = req.repid_score
+        .or_else(|| get_agent_repid(&agent_id))
+        .ok_or(StatusCode::NOT_FOUND)?;
     let above = repid > threshold;
     let tier = req.tier.unwrap_or_else(|| score_to_tier(repid).into());
     let statement = format!("RepID > {}", threshold);
