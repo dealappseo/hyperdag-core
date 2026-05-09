@@ -36,8 +36,10 @@ struct ProofRecord {
 #[derive(Deserialize)]
 struct ProofRequest {
     agent_id: Option<String>,
-    threshold: Option<u64>,
+    requester_pubkey: Option<String>,
     tier: Option<String>,
+    timestamp: Option<u64>,
+    threshold: Option<u64>,
     repid_score: Option<u64>,
 }
 
@@ -54,6 +56,7 @@ struct ProofResponse {
     protocol: String,
     proving_time_ms: u64,
     proof_size_bytes: usize,
+    proof_bytes: String,
 }
 
 #[derive(Serialize)]
@@ -75,21 +78,37 @@ struct HealthResponse {
 }
 
 fn get_agent_repid(agent_id: &str) -> Option<u64> {
+    // TODO: Pull from Supabase in STARK-MIGRATION-PHASE-2
     match agent_id {
-        "3747" => Some(10000),  // SOPHIA — AUTONOMOUS
-        "3748" => Some(4960),   // RAVEN — EARNING_AUTONOMY
-        "3749" => Some(940),    // ATLAS — CUSTODIED_DBT
-        "3750" => Some(1400),   // GUARDIAN — CUSTODIED_DBT
+        "3747" => Some(9000),  // SOPHIA — VETERAN
+        "3748" => Some(6000),  // RAVEN — AUTONOMOUS
+        "3749" => Some(2500),  // ATLAS — ESTABLISHED
+        "3750" => Some(800),   // GUARDIAN — EARNING
+        "test-001" => Some(750), // Test agent for EARNING
         _ => None,
     }
 }
 
 fn score_to_tier(score: u64) -> &'static str {
     match score {
-        0..=999 => "CUSTODIED_DBT",
-        1000..=4999 => "EARNING_AUTONOMY",
-        5000..=10000 => "AUTONOMOUS",
-        _ => "CUSTODIED_DBT",
+        0..=499 => "PROBATIONARY",
+        500..=999 => "EARNING",
+        1000..=4999 => "ESTABLISHED",
+        5000..=7999 => "AUTONOMOUS",
+        8000..=10000 => "VETERAN",
+        _ => "PROBATIONARY",
+    }
+}
+
+fn tier_to_threshold(tier: &str) -> Result<u64, &'static str> {
+    match tier {
+        "PROBATIONARY" => Ok(0),
+        "EARNING" => Ok(499),
+        "ESTABLISHED" => Ok(999),
+        "AUTONOMOUS" => Ok(4999),
+        "VETERAN" => Ok(7999),
+        "CUSTODIED_DBT" | "EARNING_AUTONOMY" => Err("Obsolete tier nomenclature"),
+        _ => Err("Unknown tier"),
     }
 }
 
@@ -117,34 +136,43 @@ async fn generate_proof(
     Json(req): Json<ProofRequest>,
 ) -> Result<Json<ProofResponse>, StatusCode> {
     let agent_id = req.agent_id.unwrap_or_else(|| "3747".into());
-    let threshold = req.threshold.unwrap_or(5000);
+    let tier = req.tier.clone().unwrap_or_else(|| {
+        let score = req.repid_score.or_else(|| get_agent_repid(&agent_id)).unwrap_or(0);
+        score_to_tier(score).into()
+    });
+    let threshold = match req.threshold {
+        Some(t) => t,
+        None => tier_to_threshold(&tier).map_err(|_| StatusCode::BAD_REQUEST)?,
+    };
     let repid = req.repid_score
         .or_else(|| get_agent_repid(&agent_id))
         .ok_or(StatusCode::NOT_FOUND)?;
     let above = repid > threshold;
-    let tier = req.tier.unwrap_or_else(|| score_to_tier(repid).into());
     let statement = format!("RepID > {}", threshold);
 
     let start = Instant::now();
 
     // Try Plonky3 STARK proof
-    let (proof_type, commitment, proof_size) = if above {
+    let (proof_type, commitment, proof_bytes) = if above {
         let diff = (repid - threshold - 1) as u32;
         match circuit::prove_range_check(diff) {
-            Ok(proof_bytes) => {
+            Ok(bytes) => {
                 let commitment = sha256_commitment(&agent_id, repid, threshold);
-                ("plonky3_range_check".to_string(), commitment, proof_bytes.len())
+                ("plonky3_range_check".to_string(), commitment, bytes)
             }
             Err(e) => {
                 eprintln!("[ZKP] Plonky3 proof failed ({}), falling back to SHA-256", e);
                 let commitment = sha256_commitment(&agent_id, repid, threshold);
-                ("sha256_commitment_poc".to_string(), commitment, 32)
+                ("sha256_commitment_poc".to_string(), commitment, "sha256_fallback_placeholder".as_bytes().to_vec())
             }
         }
     } else {
         let commitment = sha256_commitment(&agent_id, repid, threshold);
-        ("sha256_commitment_poc".to_string(), commitment, 32)
+        ("sha256_commitment_poc".to_string(), commitment, "not_above_threshold".as_bytes().to_vec())
     };
+
+    let proof_size = proof_bytes.len();
+    let proof_bytes_str = String::from_utf8_lossy(&proof_bytes).to_string();
 
     let proving_time = start.elapsed().as_millis() as u64;
 
@@ -172,6 +200,7 @@ async fn generate_proof(
         protocol: "HyperDAG Trust Protocol v1".into(),
         proving_time_ms: proving_time,
         proof_size_bytes: proof_size,
+        proof_bytes: proof_bytes_str,
     }))
 }
 
@@ -202,6 +231,7 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(health))
         .route("/zkp/repid-proof", post(generate_proof))
+        .route("/prove/trade_auth", post(generate_proof))
         .route("/zkp/verify/{commitment}", get(verify_proof))
         .layer(CorsLayer::permissive())
         .with_state(store);
