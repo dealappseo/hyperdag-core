@@ -22,7 +22,7 @@ use p3_matrix::Matrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_monty_31::dft::RecursiveDft;
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
-use p3_uni_stark::{prove, verify, StarkConfig};
+use p3_uni_stark::{prove, verify, StarkConfig, Proof};
 
 /// AIR for range-checking a 32-bit value.
 pub struct RepIdRangeCheckAir {
@@ -122,10 +122,61 @@ pub fn prove_range_check(value: u32) -> Result<Vec<u8>, String> {
     verify(&config, &air, &proof, &vec![])
         .map_err(|e| format!("Verify failed: {:?}", e))?;
 
-    // Return a proof indicator (full serialization requires serde on Proof<SC>)
-    let proof_bytes = format!(
-        "plonky3_stark_babybear_rangecheck_value_{}_verified_ok",
-        value
-    );
-    Ok(proof_bytes.into_bytes())
+    // Return the real serialized proof bytes
+    let proof_bytes = bincode::serialize(&proof)
+        .map_err(|e| format!("Plonky3 proof serialization failed: {}", e))?;
+    
+    Ok(proof_bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_proof_serialization_round_trip() {
+        let value = 100;
+        let air = RepIdRangeCheckAir { value };
+        
+        type Val = BabyBear;
+        type Challenge = BinomialExtensionField<Val, 4>;
+        type ByteHash = Keccak256Hash;
+        type FieldHash = SerializingHasher<ByteHash>;
+        type MyCompress = CompressionFunctionFromHasher<ByteHash, 2, 32>;
+        type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 2, 32>;
+        type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+        type Dft = RecursiveDft<Val>;
+        type Pcs = p3_fri::TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
+
+        let byte_hash = ByteHash {};
+        let field_hash = FieldHash::new(ByteHash {});
+        let compress = MyCompress::new(byte_hash);
+        let val_mmcs = ValMmcs::new(field_hash, compress, 0);
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+
+        let fri_config = FriConfig {
+            log_blowup: 2,
+            num_queries: 28,
+            log_final_poly_len: 0, max_log_arity: 1, commit_proof_of_work_bits: 0, query_proof_of_work_bits: 8,
+            mmcs: challenge_mmcs,
+        };
+
+        let trace = generate_trace::<Val>(value);
+        let dft = Dft::new(trace.height() << fri_config.log_blowup);
+        let pcs = Pcs::new(dft, val_mmcs, fri_config);
+        let challenger = SerializingChallenger32::new(HashChallenger::<u8, ByteHash, 32>::new(vec![], byte_hash.clone()));
+        let config = StarkConfig::new(pcs, challenger);
+
+        let proof = prove(&config, &air, trace, &vec![]);
+        
+        // Serialize
+        let encoded: Vec<u8> = bincode::serialize(&proof).expect("Serialization failed");
+        
+        // Deserialize - need full type for bincode in test context if inference fails
+        // In this case Proof<_> should work.
+        let decoded: Proof<_> = bincode::deserialize(&encoded).expect("Deserialization failed");
+        
+        // Verify decoded proof
+        verify(&config, &air, &decoded, &vec![]).expect("Verification of decoded proof failed");
+    }
 }

@@ -18,6 +18,7 @@ use sha2::{Digest, Sha256};
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Instant};
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
+use base64::Engine;
 
 type Store = Arc<RwLock<HashMap<String, ProofRecord>>>;
 
@@ -78,13 +79,12 @@ struct HealthResponse {
 }
 
 fn get_agent_repid(agent_id: &str) -> Option<u64> {
-    // TODO: Pull from Supabase in STARK-MIGRATION-PHASE-2
+    // TODO: Implement real Supabase lookup in STARK-MIGRATION-PHASE-3
     match agent_id {
-        "3747" => Some(9000),  // SOPHIA — VETERAN
-        "3748" => Some(6000),  // RAVEN — AUTONOMOUS
-        "3749" => Some(2500),  // ATLAS — ESTABLISHED
-        "3750" => Some(800),   // GUARDIAN — EARNING
-        "test-001" => Some(750), // Test agent for EARNING
+        "3747" => Some(10000), // SOPHIA — VETERAN
+        "3748" => Some(4960),  // RAVEN — ESTABLISHED
+        "3749" => Some(940),   // ATLAS — EARNING
+        "3750" => Some(1400),  // GUARDIAN — ESTABLISHED
         _ => None,
     }
 }
@@ -172,7 +172,7 @@ async fn generate_proof(
     };
 
     let proof_size = proof_bytes.len();
-    let proof_bytes_str = String::from_utf8_lossy(&proof_bytes).to_string();
+    let proof_bytes_str = base64::engine::general_purpose::STANDARD.encode(&proof_bytes);
 
     let proving_time = start.elapsed().as_millis() as u64;
 
