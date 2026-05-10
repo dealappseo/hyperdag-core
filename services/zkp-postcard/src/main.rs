@@ -20,7 +20,14 @@ use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
 use base64::Engine;
 
-type Store = Arc<RwLock<HashMap<String, ProofRecord>>>;
+struct AppState {
+    store: Arc<RwLock<HashMap<String, ProofRecord>>>,
+    http_client: reqwest::Client,
+    supabase_url: String,
+    supabase_key: String,
+}
+
+type SharedState = Arc<AppState>;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct ProofRecord {
@@ -58,6 +65,10 @@ struct ProofResponse {
     proving_time_ms: u64,
     proof_size_bytes: usize,
     proof_bytes: String,
+    // Phase 3 fields
+    repid_score_actual: u64,
+    repid_score_supplied: Option<u64>,
+    score_source: String,
 }
 
 #[derive(Serialize)]
@@ -78,15 +89,38 @@ struct HealthResponse {
     protocol: String,
 }
 
-fn get_agent_repid(agent_id: &str) -> Option<u64> {
-    // TODO: Implement real Supabase lookup in STARK-MIGRATION-PHASE-3
-    match agent_id {
-        "3747" => Some(10000), // SOPHIA — VETERAN
-        "3748" => Some(4960),  // RAVEN — ESTABLISHED
-        "3749" => Some(940),   // ATLAS — EARNING
-        "3750" => Some(1400),  // GUARDIAN — ESTABLISHED
-        _ => None,
+async fn fetch_agent_repid(
+    state: &SharedState,
+    agent_id: &str,
+) -> Result<(u64, String), StatusCode> {
+    // Check if agent_id is a UUID or a legacy numeric ID
+    // If it's 3747, 3748, etc., we might need to map it or it might be in the 'id' column as UUID-equivalent
+    // The sample showed 'id' is UUID.
+    
+    let url = format!("{}/rest/v1/repid_agents?id=eq.{}&select=current_repid,tier", state.supabase_url, agent_id);
+    
+    let res = state.http_client
+        .get(&url)
+        .header("apikey", &state.supabase_key)
+        .header("Authorization", format!("Bearer {}", state.supabase_key))
+        .send()
+        .await
+        .map_err(|e| {
+            eprintln!("[ZKP] Supabase request failed: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    if res.status() == reqwest::StatusCode::NOT_FOUND {
+        return Err(StatusCode::NOT_FOUND);
     }
+
+    let agents: Vec<serde_json::Value> = res.json().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let agent = agents.first().ok_or(StatusCode::NOT_FOUND)?;
+
+    let score = agent["current_repid"].as_u64().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let tier = agent["tier"].as_str().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?.to_string();
+
+    Ok((score, tier))
 }
 
 fn score_to_tier(score: u64) -> &'static str {
@@ -132,21 +166,36 @@ async fn health() -> Json<HealthResponse> {
 }
 
 async fn generate_proof(
-    State(store): State<Store>,
+    State(state): State<SharedState>,
     Json(req): Json<ProofRequest>,
-) -> Result<Json<ProofResponse>, StatusCode> {
-    let agent_id = req.agent_id.unwrap_or_else(|| "3747".into());
-    let tier = req.tier.clone().unwrap_or_else(|| {
-        let score = req.repid_score.or_else(|| get_agent_repid(&agent_id)).unwrap_or(0);
-        score_to_tier(score).into()
-    });
+) -> Result<Json<ProofResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let agent_id = match req.agent_id.clone() {
+        Some(id) => id,
+        None => return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "missing_agent_id" })))),
+    };
+    
+    if req.repid_score.is_some() {
+        println!("[ZKP] client_supplied_score={:?} ignored, using server-side lookup", req.repid_score);
+    }
+
+    // Server-side lookup
+    let (repid, actual_tier) = fetch_agent_repid(&state, &agent_id).await.map_err(|status| {
+        if status == StatusCode::NOT_FOUND {
+            (StatusCode::NOT_FOUND, Json(serde_json::json!({
+                "error": "agent_not_found",
+                "agent_id": agent_id
+            })))
+        } else {
+            (status, Json(serde_json::json!({ "error": "internal_error" })))
+        }
+    })?;
+
+    let tier = req.tier.clone().unwrap_or(actual_tier);
+    
     let threshold = match req.threshold {
         Some(t) => t,
-        None => tier_to_threshold(&tier).map_err(|_| StatusCode::BAD_REQUEST)?,
+        None => tier_to_threshold(&tier).map_err(|_| (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "invalid_tier" }))))?,
     };
-    let repid = req.repid_score
-        .or_else(|| get_agent_repid(&agent_id))
-        .ok_or(StatusCode::NOT_FOUND)?;
     let above = repid > threshold;
     let statement = format!("RepID > {}", threshold);
 
@@ -186,7 +235,7 @@ async fn generate_proof(
         proof_size_bytes: proof_size,
         proving_time_ms: proving_time,
     };
-    store.write().await.insert(commitment.clone(), record);
+    state.store.write().await.insert(commitment.clone(), record);
 
     Ok(Json(ProofResponse {
         proof_type,
@@ -201,14 +250,17 @@ async fn generate_proof(
         proving_time_ms: proving_time,
         proof_size_bytes: proof_size,
         proof_bytes: proof_bytes_str,
+        repid_score_actual: repid,
+        repid_score_supplied: req.repid_score,
+        score_source: "server_side_lookup".into(),
     }))
 }
 
 async fn verify_proof(
-    State(store): State<Store>,
+    State(state): State<SharedState>,
     Path(commitment): Path<String>,
 ) -> Result<Json<VerifyResponse>, StatusCode> {
-    let records = store.read().await;
+    let records = state.store.read().await;
     let record = records.get(&commitment).ok_or(StatusCode::NOT_FOUND)?;
 
     Ok(Json(VerifyResponse {
@@ -222,7 +274,22 @@ async fn verify_proof(
 
 #[tokio::main]
 async fn main() {
-    let store: Store = Arc::new(RwLock::new(HashMap::new()));
+    let store = Arc::new(RwLock::new(HashMap::new()));
+    let http_client = reqwest::Client::new();
+    
+    let supabase_url = std::env::var("SUPABASE_URL")
+        .expect("SUPABASE_URL must be set");
+    let supabase_key = std::env::var("SUPABASE_SERVICE_KEY")
+        .or_else(|_| std::env::var("SUPABASE_SERVICE_ROLE_KEY"))
+        .expect("SUPABASE_SERVICE_KEY or SUPABASE_SERVICE_ROLE_KEY must be set");
+
+    let state = Arc::new(AppState {
+        store,
+        http_client,
+        supabase_url,
+        supabase_key,
+    });
+
     let port: u16 = std::env::var("PORT")
         .unwrap_or_else(|_| "8080".into())
         .parse()
@@ -234,7 +301,7 @@ async fn main() {
         .route("/prove/trade_auth", post(generate_proof))
         .route("/zkp/verify/{commitment}", get(verify_proof))
         .layer(CorsLayer::permissive())
-        .with_state(store);
+        .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     println!("ZKP Postcard v0.2.0 listening on {}", addr);
