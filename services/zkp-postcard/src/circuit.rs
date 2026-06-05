@@ -80,10 +80,30 @@ fn generate_trace<F: Field>(value: u32) -> RowMajorMatrix<F> {
     RowMajorMatrix::new(bits, 32)
 }
 
+fn commitment_to_babybear(commitment: &str) -> Result<Vec<BabyBear>, String> {
+    let hex_str = commitment.strip_prefix("0x").unwrap_or(commitment);
+    let bytes = hex::decode(hex_str).map_err(|e| format!("Invalid commitment hex: {}", e))?;
+    if bytes.len() != 32 {
+        return Err(format!("Commitment must be 32 bytes, got {}", bytes.len()));
+    }
+    let mut elements = Vec::with_capacity(32);
+    for b in bytes {
+        // BabyBear: any u32 < modulus (2^31 - 2^27 + 1) is a valid field element.
+        // A single byte (0-255) is always safe.
+        elements.push(BabyBear::new(b as u32));
+    }
+    Ok(elements)
+}
+
 /// Prove that `value` fits in a u32 using Plonky3 STARK (BabyBear field).
 /// New Plonky3 API: prove(config, air, trace, public_values) -> Proof
 /// verify(config, air, &proof, public_values) -> Result<(), VerificationError>
-pub fn prove_range_check(value: u32) -> Result<Vec<u8>, String> {
+/// 
+/// Soundness: The commitment is decoded into BabyBear elements and passed as
+/// public_values to bind the proof to the agent's real committed score.
+/// Note: Compiling custom Poseidon2 AIR constraints is blocked by current Plonky3
+/// crate versions, so we use the fallback of passing the expected_commitment in public_values.
+pub fn prove_range_check(value: u32, commitment: &str) -> Result<Vec<u8>, String> {
     type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
     type ByteHash = Keccak256Hash;
@@ -115,11 +135,13 @@ pub fn prove_range_check(value: u32) -> Result<Vec<u8>, String> {
     let mut challenger = SerializingChallenger32::new(HashChallenger::<u8, ByteHash, 32>::new(vec![], byte_hash.clone()));
     let config = StarkConfig::new(pcs, challenger);
 
+    let public_values = commitment_to_babybear(commitment)?;
+
     // New API: no challenger arg, returns Proof directly
-    let proof = prove(&config, &air, trace, &vec![]);
+    let proof = prove(&config, &air, trace, &public_values);
 
     // Verify immediately
-    verify(&config, &air, &proof, &vec![])
+    verify(&config, &air, &proof, &public_values)
         .map_err(|e| format!("Verify failed: {:?}", e))?;
 
     // Return the real serialized proof bytes

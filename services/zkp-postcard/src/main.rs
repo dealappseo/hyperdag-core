@@ -46,7 +46,7 @@ struct ProofRequest {
     agent_id: Option<String>,
     requester_pubkey: Option<String>,
     tier: Option<String>,
-    timestamp: Option<u64>,
+    timestamp: Option<serde_json::Value>,
     threshold: Option<u64>,
     repid_score: Option<u64>,
 }
@@ -204,14 +204,13 @@ async fn generate_proof(
     // Try Plonky3 STARK proof
     let (proof_type, commitment, proof_bytes) = if above {
         let diff = (repid - threshold - 1) as u32;
-        match circuit::prove_range_check(diff) {
+        let commitment = sha256_commitment(&agent_id, repid, threshold);
+        match circuit::prove_range_check(diff, &commitment) {
             Ok(bytes) => {
-                let commitment = sha256_commitment(&agent_id, repid, threshold);
                 ("plonky3_range_check".to_string(), commitment, bytes)
             }
             Err(e) => {
                 eprintln!("[ZKP] Plonky3 proof failed ({}), falling back to SHA-256", e);
-                let commitment = sha256_commitment(&agent_id, repid, threshold);
                 ("sha256_commitment_poc".to_string(), commitment, "sha256_fallback_placeholder".as_bytes().to_vec())
             }
         }
@@ -299,6 +298,7 @@ async fn main() {
         .route("/health", get(health))
         .route("/zkp/repid-proof", post(generate_proof))
         .route("/prove/trade_auth", post(generate_proof))
+        .route("/prove/tier_range", post(generate_proof))
         .route("/zkp/verify/{commitment}", get(verify_proof))
         .layer(CorsLayer::permissive())
         .with_state(state);
