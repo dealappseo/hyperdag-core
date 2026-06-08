@@ -1,10 +1,22 @@
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_air::WindowAccess;
-// Plonky3 STARK Range-Check Circuit for RepID Verification
+// Plonky3 STARK Range-Check Circuit for RepID Verification (agent-bound)
 //
-// Proves that a value fits within a 32-bit unsigned integer range.
-// To prove "RepID > threshold": diff = repid - threshold - 1
-// prove(diff fits in u32) => repid > threshold
+// Proves "RepID > threshold" for a SPECIFIC agent:
+//   gap = repid_score - threshold - 1
+//   prove(gap fits in u32)  =>  repid_score > threshold
+//
+// Soundness (A1, the keystone):
+//   The statement is the public tuple {agent_id, threshold, repid_score}, exposed as
+//   circuit public values. Two binding properties hold:
+//     1. agent-binding  — agent_id (16 bytes) is in public_values, observed into the
+//        Fiat-Shamir transcript by both prover and verifier. A proof made for agent A
+//        FAILS verification under agent B's public values (different transcript). This
+//        is what makes a RepID proof non-replayable across agents.
+//     2. value-binding  — an AIR boundary constraint asserts the range-checked gap equals
+//        (repid_score - threshold - 1) drawn from public_values, so the proof actually
+//        attests "THIS agent's score exceeds THIS threshold," not merely "some 32-bit
+//        value exists."
 //
 // Field: BabyBear (p = 2^31 - 2^27 + 1)
 // Hash: Keccak256
@@ -23,9 +35,21 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_monty_31::dft::RecursiveDft;
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
 use p3_uni_stark::{prove, verify, StarkConfig, Proof};
+use sha2::{Digest, Sha256};
 
-/// AIR for range-checking a 32-bit value.
+/// Canonical public-input layout (BabyBear field elements) — the RepID statement.
+///   [0..16]  agent_id : the 16 bytes of the agent UUID, one byte per element
+///   [16]     threshold
+///   [17]     repid_score
+/// The WASM verifier and `@hyperdag/trustshell` MUST reproduce this exact encoding.
+pub const NUM_PUBLIC_VALUES: usize = 18;
+const PUB_THRESHOLD: usize = 16;
+const PUB_REPID: usize = 17;
+
+/// AIR for range-checking the gap (repid - threshold - 1) and binding it to the
+/// public statement {agent_id, threshold, repid_score}.
 pub struct RepIdRangeCheckAir {
+    /// The gap = repid_score - threshold - 1 (the value range-checked into 32 bits).
     pub value: u32,
 }
 
@@ -33,10 +57,19 @@ impl<F: Field> BaseAir<F> for RepIdRangeCheckAir {
     fn width(&self) -> usize {
         32
     }
+
+    fn num_public_values(&self) -> usize {
+        NUM_PUBLIC_VALUES
+    }
 }
 
 impl<AB: AirBuilder> Air<AB> for RepIdRangeCheckAir where AB::F: Field {
     fn eval(&self, builder: &mut AB) {
+        // Copy the public statement scalars out before taking a mutable borrow of the builder.
+        let pis = builder.public_values();
+        let threshold = pis[PUB_THRESHOLD];
+        let repid = pis[PUB_REPID];
+
         let main = builder.main();
         let row = main.current_slice();
 
@@ -54,16 +87,20 @@ impl<AB: AirBuilder> Air<AB> for RepIdRangeCheckAir where AB::F: Field {
             .sum::<AB::Expr>();
         builder.when(upper_product).assert_zero(remaining_sum);
 
-        // Reconstruct value from bits and verify
+        // Reconstruct the gap from its 32 bits; assert each bit is boolean.
         let mut reconstructed = AB::Expr::ZERO;
         for i in 0..32 {
             let bit = row[i];
             builder.assert_bool(bit);
             reconstructed += AB::Expr::from_u32(1 << (31 - i)) * bit;
         }
+
+        // value-binding: the range-checked gap == repid_score - threshold - 1 (public).
+        // Replaces the prior private-value binding (reconstructed == self.value), which the
+        // verifier could not check. Now the proof is tied to the public statement.
         builder
             .when_first_row()
-            .assert_eq(AB::Expr::from_u32(self.value), reconstructed);
+            .assert_eq(reconstructed, repid.into() - threshold.into() - AB::Expr::ONE);
     }
 }
 
@@ -80,10 +117,57 @@ fn generate_trace<F: Field>(value: u32) -> RowMajorMatrix<F> {
     RowMajorMatrix::new(bits, 32)
 }
 
-/// Prove that `value` fits in a u32 using Plonky3 STARK (BabyBear field).
-/// New Plonky3 API: prove(config, air, trace, public_values) -> Proof
-/// verify(config, air, &proof, public_values) -> Result<(), VerificationError>
-pub fn prove_range_check(value: u32) -> Result<Vec<u8>, String> {
+/// Map an agent identifier to 16 bytes. A canonical UUID (with or without hyphens)
+/// maps to its 16 raw bytes; any other identifier is bound via sha256(id)[..16] so
+/// legacy/numeric agent ids still produce a deterministic, collision-resistant binding.
+fn agent_id_to_16_bytes(agent_id: &str) -> [u8; 16] {
+    let cleaned: String = agent_id.chars().filter(|c| *c != '-').collect();
+    if cleaned.len() == 32 && cleaned.chars().all(|c| c.is_ascii_hexdigit()) {
+        if let Ok(bytes) = hex::decode(&cleaned) {
+            let mut arr = [0u8; 16];
+            arr.copy_from_slice(&bytes);
+            return arr;
+        }
+    }
+    let digest = Sha256::digest(agent_id.as_bytes());
+    let mut arr = [0u8; 16];
+    arr.copy_from_slice(&digest[..16]);
+    arr
+}
+
+/// Build the canonical 18-element public-values vector for the statement
+/// {agent_id, threshold, repid_score}. Both threshold and repid_score must be < 2^31
+/// (well above the 0..=10000 RepID range), guaranteeing valid single-element encodings.
+pub fn build_public_values(
+    agent_id: &str,
+    threshold: u64,
+    repid_score: u64,
+) -> Result<Vec<BabyBear>, String> {
+    if threshold >= (1u64 << 31) || repid_score >= (1u64 << 31) {
+        return Err(format!(
+            "threshold/repid_score must be < 2^31 (got threshold={}, repid_score={})",
+            threshold, repid_score
+        ));
+    }
+    let mut pv = Vec::with_capacity(NUM_PUBLIC_VALUES);
+    for b in agent_id_to_16_bytes(agent_id) {
+        pv.push(BabyBear::new(b as u32));
+    }
+    pv.push(BabyBear::new(threshold as u32));
+    pv.push(BabyBear::new(repid_score as u32));
+    debug_assert_eq!(pv.len(), NUM_PUBLIC_VALUES);
+    Ok(pv)
+}
+
+/// Prove "repid_score > threshold" for `agent_id` using a Plonky3 STARK (BabyBear).
+/// `value` is the gap = repid_score - threshold - 1 (caller computes it).
+/// The proof is bound to the public statement {agent_id, threshold, repid_score}.
+pub fn prove_range_check(
+    value: u32,
+    agent_id: &str,
+    threshold: u64,
+    repid_score: u64,
+) -> Result<Vec<u8>, String> {
     type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
     type ByteHash = Keccak256Hash;
@@ -115,17 +199,19 @@ pub fn prove_range_check(value: u32) -> Result<Vec<u8>, String> {
     let mut challenger = SerializingChallenger32::new(HashChallenger::<u8, ByteHash, 32>::new(vec![], byte_hash.clone()));
     let config = StarkConfig::new(pcs, challenger);
 
-    // New API: no challenger arg, returns Proof directly
-    let proof = prove(&config, &air, trace, &vec![]);
+    let public_values = build_public_values(agent_id, threshold, repid_score)?;
 
-    // Verify immediately
-    verify(&config, &air, &proof, &vec![])
+    // New API: no challenger arg, returns Proof directly
+    let proof = prove(&config, &air, trace, &public_values);
+
+    // Verify immediately (prover-side sanity check)
+    verify(&config, &air, &proof, &public_values)
         .map_err(|e| format!("Verify failed: {:?}", e))?;
 
     // Return the real serialized proof bytes
     let proof_bytes = bincode::serialize(&proof)
         .map_err(|e| format!("Plonky3 proof serialization failed: {}", e))?;
-    
+
     Ok(proof_bytes)
 }
 
@@ -133,50 +219,91 @@ pub fn prove_range_check(value: u32) -> Result<Vec<u8>, String> {
 mod tests {
     use super::*;
 
+    /// Shared StarkConfig builder for tests (mirrors prove_range_check).
+    macro_rules! test_config {
+        () => {{
+            type Val = BabyBear;
+            type Challenge = BinomialExtensionField<Val, 4>;
+            type ByteHash = Keccak256Hash;
+            type FieldHash = SerializingHasher<ByteHash>;
+            type MyCompress = CompressionFunctionFromHasher<ByteHash, 2, 32>;
+            type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 2, 32>;
+            type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+            type Dft = RecursiveDft<Val>;
+            type Pcs = p3_fri::TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
+
+            let byte_hash = ByteHash {};
+            let field_hash = FieldHash::new(ByteHash {});
+            let compress = MyCompress::new(byte_hash);
+            let val_mmcs = ValMmcs::new(field_hash, compress, 0);
+            let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+            let fri_config = FriConfig {
+                log_blowup: 2,
+                num_queries: 28,
+                log_final_poly_len: 0, max_log_arity: 1, commit_proof_of_work_bits: 0, query_proof_of_work_bits: 8,
+                mmcs: challenge_mmcs,
+            };
+            let trace_height = 32usize; // single 32-wide row; height() == 1
+            let _ = trace_height;
+            let dft = Dft::new(1usize << fri_config.log_blowup);
+            let pcs = Pcs::new(dft, val_mmcs, fri_config);
+            let challenger = SerializingChallenger32::new(HashChallenger::<u8, ByteHash, 32>::new(vec![], byte_hash.clone()));
+            StarkConfig::new(pcs, challenger)
+        }};
+    }
+
+    const AGENT_A: &str = "394b6ee4-62e7-4c66-8445-29107b097b4c";
+    const AGENT_B: &str = "942860a6-e26f-4334-ae94-b7c1abed1e8c";
+
     #[test]
-    fn test_proof_serialization_round_trip() {
-        let value = 100;
-        let air = RepIdRangeCheckAir { value };
-        
-        type Val = BabyBear;
-        type Challenge = BinomialExtensionField<Val, 4>;
-        type ByteHash = Keccak256Hash;
-        type FieldHash = SerializingHasher<ByteHash>;
-        type MyCompress = CompressionFunctionFromHasher<ByteHash, 2, 32>;
-        type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 2, 32>;
-        type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
-        type Dft = RecursiveDft<Val>;
-        type Pcs = p3_fri::TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
+    fn test_agent_bound_proof_round_trip() {
+        let repid = 2280u64;
+        let threshold = 999u64;
+        let gap = (repid - threshold - 1) as u32;
+        let config = test_config!();
+        let air = RepIdRangeCheckAir { value: gap };
+        let trace = generate_trace::<BabyBear>(gap);
+        let pv = build_public_values(AGENT_A, threshold, repid).unwrap();
 
-        let byte_hash = ByteHash {};
-        let field_hash = FieldHash::new(ByteHash {});
-        let compress = MyCompress::new(byte_hash);
-        let val_mmcs = ValMmcs::new(field_hash, compress, 0);
-        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+        let proof = prove(&config, &air, trace, &pv);
+        let encoded = bincode::serialize(&proof).expect("serialize");
+        let decoded: Proof<_> = bincode::deserialize(&encoded).expect("deserialize");
+        verify(&config, &air, &decoded, &pv).expect("agent-bound proof must verify");
+    }
 
-        let fri_config = FriConfig {
-            log_blowup: 2,
-            num_queries: 28,
-            log_final_poly_len: 0, max_log_arity: 1, commit_proof_of_work_bits: 0, query_proof_of_work_bits: 8,
-            mmcs: challenge_mmcs,
-        };
+    #[test]
+    fn test_wrong_agent_id_fails_verification() {
+        // Soundness: a proof made for AGENT_A must NOT verify under AGENT_B's public values.
+        let repid = 2280u64;
+        let threshold = 999u64;
+        let gap = (repid - threshold - 1) as u32;
+        let config = test_config!();
+        let air = RepIdRangeCheckAir { value: gap };
+        let trace = generate_trace::<BabyBear>(gap);
 
-        let trace = generate_trace::<Val>(value);
-        let dft = Dft::new(trace.height() << fri_config.log_blowup);
-        let pcs = Pcs::new(dft, val_mmcs, fri_config);
-        let challenger = SerializingChallenger32::new(HashChallenger::<u8, ByteHash, 32>::new(vec![], byte_hash.clone()));
-        let config = StarkConfig::new(pcs, challenger);
+        let pv_a = build_public_values(AGENT_A, threshold, repid).unwrap();
+        let proof = prove(&config, &air, trace, &pv_a);
 
-        let proof = prove(&config, &air, trace, &vec![]);
-        
-        // Serialize
-        let encoded: Vec<u8> = bincode::serialize(&proof).expect("Serialization failed");
-        
-        // Deserialize - need full type for bincode in test context if inference fails
-        // In this case Proof<_> should work.
-        let decoded: Proof<_> = bincode::deserialize(&encoded).expect("Deserialization failed");
-        
-        // Verify decoded proof
-        verify(&config, &air, &decoded, &vec![]).expect("Verification of decoded proof failed");
+        let pv_b = build_public_values(AGENT_B, threshold, repid).unwrap();
+        let res = verify(&config, &air, &proof, &pv_b);
+        assert!(res.is_err(), "verification with wrong agent_id MUST fail");
+    }
+
+    #[test]
+    fn test_wrong_score_fails_verification() {
+        // value-binding: a proof for repid=2280 must NOT verify against a claimed repid=9999.
+        let repid = 2280u64;
+        let threshold = 999u64;
+        let gap = (repid - threshold - 1) as u32;
+        let config = test_config!();
+        let air = RepIdRangeCheckAir { value: gap };
+        let trace = generate_trace::<BabyBear>(gap);
+
+        let pv_real = build_public_values(AGENT_A, threshold, repid).unwrap();
+        let proof = prove(&config, &air, trace, &pv_real);
+
+        let pv_lie = build_public_values(AGENT_A, threshold, 9999).unwrap();
+        let res = verify(&config, &air, &proof, &pv_lie);
+        assert!(res.is_err(), "verification with inflated repid_score MUST fail");
     }
 }

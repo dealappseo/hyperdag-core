@@ -204,7 +204,8 @@ async fn generate_proof(
     // Try Plonky3 STARK proof
     let (proof_type, commitment, proof_bytes) = if above {
         let diff = (repid - threshold - 1) as u32;
-        match circuit::prove_range_check(diff) {
+        // Agent-bound proof: statement is the public tuple {agent_id, threshold, repid_score}.
+        match circuit::prove_range_check(diff, &agent_id, threshold, repid) {
             Ok(bytes) => {
                 let commitment = sha256_commitment(&agent_id, repid, threshold);
                 ("plonky3_range_check".to_string(), commitment, bytes)
