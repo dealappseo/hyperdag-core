@@ -69,6 +69,9 @@ struct ProofResponse {
     repid_score_actual: u64,
     repid_score_supplied: Option<u64>,
     score_source: String,
+    // 0.3.0 freshness — the authoritative epoch bound into the proof + where it came from.
+    epoch: u64,
+    epoch_source: String,
 }
 
 #[derive(Serialize)]
@@ -152,11 +155,33 @@ fn sha256_commitment(agent_id: &str, repid: u64, threshold: u64) -> String {
     format!("0x{}", hex::encode(hasher.finalize()))
 }
 
+const DEFAULT_EPOCH_RPC: &str = "https://sepolia.base.org";
+
+/// Fetch the AUTHORITATIVE freshness epoch from chain (Base Sepolia block height):
+/// `epoch = block_height / EPOCH_BLOCKS` (a coarse window so brief lag/reorgs don't shift it).
+/// NEVER derived from agent input. Returns (epoch, source). Fail-closed: an error here blocks proof
+/// minting — better no proof than a proof that isn't freshness-bound. Configurable via EPOCH_RPC_URL
+/// and EPOCH_BLOCKS.
+async fn fetch_authoritative_epoch(state: &SharedState) -> Result<(u64, String), String> {
+    let rpc = std::env::var("EPOCH_RPC_URL").unwrap_or_else(|_| DEFAULT_EPOCH_RPC.to_string());
+    let epoch_blocks: u64 = std::env::var("EPOCH_BLOCKS")
+        .ok().and_then(|s| s.parse().ok()).filter(|n| *n > 0).unwrap_or(300);
+    let body = serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "eth_blockNumber", "params": [] });
+    let res = state.http_client.post(&rpc).json(&body)
+        .timeout(std::time::Duration::from_secs(8)).send().await
+        .map_err(|e| format!("epoch rpc request failed: {}", e))?;
+    let j: serde_json::Value = res.json().await.map_err(|e| format!("epoch rpc bad json: {}", e))?;
+    let hexstr = j["result"].as_str().ok_or_else(|| "epoch rpc: missing result".to_string())?;
+    let block = u64::from_str_radix(hexstr.trim_start_matches("0x"), 16)
+        .map_err(|e| format!("epoch rpc: bad block hex: {}", e))?;
+    Ok((block / epoch_blocks, format!("base-sepolia:block/{}", epoch_blocks)))
+}
+
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "healthy".into(),
         service: "zkp-postcard".into(),
-        version: "0.2.0".into(),
+        version: "0.3.0".into(),
         proof_types: vec![
             "plonky3_range_check".into(),
             "sha256_commitment_poc".into(),
@@ -197,15 +222,26 @@ async fn generate_proof(
         None => tier_to_threshold(&tier).map_err(|_| (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "invalid_tier" }))))?,
     };
     let above = repid > threshold;
-    let statement = format!("RepID > {}", threshold);
+
+    // 0.3.0 FRESHNESS: bind an AUTHORITATIVE epoch (block-height-derived) into the proof. The agent's
+    // own `timestamp` field is IGNORED — letting the agent pick the epoch would defeat replay-across-
+    // time (they'd post-date a proof). Fail-closed: no authoritative epoch → no proof.
+    if req.timestamp.is_some() {
+        println!("[ZKP] client-supplied timestamp ignored — epoch is authoritative (block-height-derived)");
+    }
+    let (epoch, epoch_source) = fetch_authoritative_epoch(&state).await.map_err(|e| {
+        (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({ "error": "epoch_unavailable", "detail": e })))
+    })?;
+
+    let statement = format!("RepID > {} @ epoch {}", threshold, epoch);
 
     let start = Instant::now();
 
     // Try Plonky3 STARK proof
     let (proof_type, commitment, proof_bytes) = if above {
         let diff = (repid - threshold - 1) as u32;
-        // Agent-bound proof: statement is the public tuple {agent_id, threshold, repid_score}.
-        match circuit::prove_range_check(diff, &agent_id, threshold, repid) {
+        // Agent-bound + freshness-bound proof: public tuple {agent_id, threshold, repid_score, epoch}.
+        match circuit::prove_range_check(diff, &agent_id, threshold, repid, epoch) {
             Ok(bytes) => {
                 let commitment = sha256_commitment(&agent_id, repid, threshold);
                 ("plonky3_range_check".to_string(), commitment, bytes)
@@ -254,6 +290,8 @@ async fn generate_proof(
         repid_score_actual: repid,
         repid_score_supplied: req.repid_score,
         score_source: "server_side_lookup".into(),
+        epoch,
+        epoch_source,
     }))
 }
 

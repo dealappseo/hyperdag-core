@@ -41,10 +41,16 @@ use sha2::{Digest, Sha256};
 ///   [0..16]  agent_id : the 16 bytes of the agent UUID, one byte per element
 ///   [16]     threshold
 ///   [17]     repid_score
-/// The WASM verifier and `@hyperdag/trustshell` MUST reproduce this exact encoding.
-pub const NUM_PUBLIC_VALUES: usize = 18;
+///   [18]     epoch     : an AUTHORITATIVE freshness epoch (block-height-derived, NEVER agent-supplied).
+/// Binding `epoch` into the public values (observed into the Fiat-Shamir transcript) ties each proof
+/// to the epoch it was minted in. A freshness check (verifier-side, against the current authoritative
+/// epoch) then rejects a stale proof — defeating replay-across-time (a proof minted when RepID was
+/// high being re-presented later). 0.3.0. The WASM verifier + `@hyperdag/trustshell` MUST reproduce
+/// this exact encoding.
+pub const NUM_PUBLIC_VALUES: usize = 19;
 const PUB_THRESHOLD: usize = 16;
 const PUB_REPID: usize = 17;
+const PUB_EPOCH: usize = 18;
 
 /// AIR for range-checking the gap (repid - threshold - 1) and binding it to the
 /// public statement {agent_id, threshold, repid_score}.
@@ -133,18 +139,20 @@ fn agent_id_to_16_bytes(agent_id: &str) -> [u8; 16] {
     arr
 }
 
-/// Build the canonical 18-element public-values vector for the statement
-/// {agent_id, threshold, repid_score}. Both threshold and repid_score must be < 2^31
-/// (well above the 0..=10000 RepID range), guaranteeing valid single-element encodings.
+/// Build the canonical 19-element public-values vector for the statement
+/// {agent_id, threshold, repid_score, epoch}. threshold, repid_score, and epoch must each be < 2^31.
+/// `epoch` is an AUTHORITATIVE freshness epoch (block-height-derived) — the prover MUST source it
+/// from chain/EAS, NEVER from agent input, or replay-across-time is not defeated.
 pub fn build_public_values(
     agent_id: &str,
     threshold: u64,
     repid_score: u64,
+    epoch: u64,
 ) -> Result<Vec<BabyBear>, String> {
-    if threshold >= (1u64 << 31) || repid_score >= (1u64 << 31) {
+    if threshold >= (1u64 << 31) || repid_score >= (1u64 << 31) || epoch >= (1u64 << 31) {
         return Err(format!(
-            "threshold/repid_score must be < 2^31 (got threshold={}, repid_score={})",
-            threshold, repid_score
+            "threshold/repid_score/epoch must be < 2^31 (got threshold={}, repid_score={}, epoch={})",
+            threshold, repid_score, epoch
         ));
     }
     let mut pv = Vec::with_capacity(NUM_PUBLIC_VALUES);
@@ -153,18 +161,21 @@ pub fn build_public_values(
     }
     pv.push(BabyBear::new(threshold as u32));
     pv.push(BabyBear::new(repid_score as u32));
+    pv.push(BabyBear::new(epoch as u32));
     debug_assert_eq!(pv.len(), NUM_PUBLIC_VALUES);
     Ok(pv)
 }
 
-/// Prove "repid_score > threshold" for `agent_id` using a Plonky3 STARK (BabyBear).
-/// `value` is the gap = repid_score - threshold - 1 (caller computes it).
-/// The proof is bound to the public statement {agent_id, threshold, repid_score}.
+/// Prove "repid_score > threshold" for `agent_id` at `epoch`, using a Plonky3 STARK (BabyBear).
+/// `value` is the gap = repid_score - threshold - 1 (caller computes it). `epoch` MUST be the
+/// authoritative current epoch (block-height-derived) — never agent-supplied.
+/// The proof is bound to the public statement {agent_id, threshold, repid_score, epoch}.
 pub fn prove_range_check(
     value: u32,
     agent_id: &str,
     threshold: u64,
     repid_score: u64,
+    epoch: u64,
 ) -> Result<Vec<u8>, String> {
     type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
@@ -197,7 +208,7 @@ pub fn prove_range_check(
     let mut challenger = SerializingChallenger32::new(HashChallenger::<u8, ByteHash, 32>::new(vec![], byte_hash.clone()));
     let config = StarkConfig::new(pcs, challenger);
 
-    let public_values = build_public_values(agent_id, threshold, repid_score)?;
+    let public_values = build_public_values(agent_id, threshold, repid_score, epoch)?;
 
     // New API: no challenger arg, returns Proof directly
     let proof = prove(&config, &air, trace, &public_values);
@@ -252,6 +263,7 @@ mod tests {
 
     const AGENT_A: &str = "394b6ee4-62e7-4c66-8445-29107b097b4c";
     const AGENT_B: &str = "942860a6-e26f-4334-ae94-b7c1abed1e8c";
+    const EPOCH: u64 = 1_000;
 
     #[test]
     fn test_agent_bound_proof_round_trip() {
@@ -261,7 +273,7 @@ mod tests {
         let config = test_config!();
         let air = RepIdRangeCheckAir { value: gap };
         let trace = generate_trace::<BabyBear>(gap);
-        let pv = build_public_values(AGENT_A, threshold, repid).unwrap();
+        let pv = build_public_values(AGENT_A, threshold, repid, EPOCH).unwrap();
 
         let proof = prove(&config, &air, trace, &pv);
         let encoded = bincode::serialize(&proof).expect("serialize");
@@ -279,10 +291,10 @@ mod tests {
         let air = RepIdRangeCheckAir { value: gap };
         let trace = generate_trace::<BabyBear>(gap);
 
-        let pv_a = build_public_values(AGENT_A, threshold, repid).unwrap();
+        let pv_a = build_public_values(AGENT_A, threshold, repid, EPOCH).unwrap();
         let proof = prove(&config, &air, trace, &pv_a);
 
-        let pv_b = build_public_values(AGENT_B, threshold, repid).unwrap();
+        let pv_b = build_public_values(AGENT_B, threshold, repid, EPOCH).unwrap();
         let res = verify(&config, &air, &proof, &pv_b);
         assert!(res.is_err(), "verification with wrong agent_id MUST fail");
     }
@@ -297,12 +309,31 @@ mod tests {
         let air = RepIdRangeCheckAir { value: gap };
         let trace = generate_trace::<BabyBear>(gap);
 
-        let pv_real = build_public_values(AGENT_A, threshold, repid).unwrap();
+        let pv_real = build_public_values(AGENT_A, threshold, repid, EPOCH).unwrap();
         let proof = prove(&config, &air, trace, &pv_real);
 
-        let pv_lie = build_public_values(AGENT_A, threshold, 9999).unwrap();
+        let pv_lie = build_public_values(AGENT_A, threshold, 9999, EPOCH).unwrap();
         let res = verify(&config, &air, &proof, &pv_lie);
         assert!(res.is_err(), "verification with inflated repid_score MUST fail");
+    }
+
+    #[test]
+    fn test_wrong_epoch_fails_verification() {
+        // freshness-binding (0.3.0): a proof minted at EPOCH must NOT verify under a different epoch.
+        // This is what makes a stale proof detectable — the epoch is bound into the transcript.
+        let repid = 2280u64;
+        let threshold = 999u64;
+        let gap = (repid - threshold - 1) as u32;
+        let config = test_config!();
+        let air = RepIdRangeCheckAir { value: gap };
+        let trace = generate_trace::<BabyBear>(gap);
+
+        let pv_now = build_public_values(AGENT_A, threshold, repid, EPOCH).unwrap();
+        let proof = prove(&config, &air, trace, &pv_now);
+
+        let pv_other_epoch = build_public_values(AGENT_A, threshold, repid, EPOCH + 1).unwrap();
+        let res = verify(&config, &air, &proof, &pv_other_epoch);
+        assert!(res.is_err(), "verification under a different epoch MUST fail (freshness binding)");
     }
 
     // BabyBear prime p = 2^31 - 2^27 + 1. A "negative" gap (repid <= threshold) is
@@ -320,7 +351,7 @@ mod tests {
             let config = test_config!();
             let air = RepIdRangeCheckAir { value: malicious_gap };
             let trace = generate_trace::<BabyBear>(malicious_gap);
-            let pv = build_public_values(agent, threshold, repid).unwrap();
+            let pv = build_public_values(agent, threshold, repid, EPOCH).unwrap();
             let proof = prove(&config, &air, trace, &pv);
             verify(&config, &air, &proof, &pv)
         }));
@@ -341,7 +372,7 @@ mod tests {
         let config = test_config!();
         let air = RepIdRangeCheckAir { value: gap };
         let trace = generate_trace::<BabyBear>(gap);
-        let pv = build_public_values(AGENT_A, threshold, repid).unwrap();
+        let pv = build_public_values(AGENT_A, threshold, repid, EPOCH).unwrap();
         let proof = prove(&config, &air, trace, &pv);
         verify(&config, &air, &proof, &pv).expect("repid == threshold + 1 must verify (gap 0)");
     }
