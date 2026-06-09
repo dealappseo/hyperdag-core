@@ -73,31 +73,29 @@ impl<AB: AirBuilder> Air<AB> for RepIdRangeCheckAir where AB::F: Field {
         let main = builder.main();
         let row = main.current_slice();
 
-        // MSB must be zero (value < 2^31)
-        builder.assert_eq(row[0], AB::Expr::ZERO);
+        // 16-bit range check (soundness fix, 2026-06-08). The gap must be < 2^16. The high
+        // 16 bits (row[0..16] = the 2^16..2^31 places, big-endian) are forced to ZERO, so a
+        // "negative" gap (repid <= threshold), which is (repid-threshold-1) mod p ~= 2^31 with
+        // high bits set, cannot be represented and verification fails. A 31-bit range over
+        // BabyBear (p = 2^31 - 2^27 + 1) was unsound: ~the whole field is representable, so a
+        // wrapped negative gap (e.g. -1 == p-1 == 2013265920 < 2^31) satisfied the equality.
+        // ASSUMPTION: repid - threshold < 65536. True for RepID (repid <= 10000, threshold >= 0
+        // => gap <= 9999). A larger spread would be rejected as out of range (fail-closed).
+        for i in 0..16 {
+            builder.assert_zero(row[i]);
+        }
 
-        // BabyBear modulus guard
-        let upper_product = row[1..5]
-            .iter()
-            .map(|&bit: &AB::Var| bit.into())
-            .product::<AB::Expr>();
-        let remaining_sum = row[5..32]
-            .iter()
-            .map(|&bit: &AB::Var| bit.into())
-            .sum::<AB::Expr>();
-        builder.when(upper_product).assert_zero(remaining_sum);
-
-        // Reconstruct the gap from its 32 bits; assert each bit is boolean.
+        // Reconstruct the gap from its low 16 bits (row[16..32] = 2^15..2^0); assert boolean.
         let mut reconstructed = AB::Expr::ZERO;
-        for i in 0..32 {
+        for i in 16..32 {
             let bit = row[i];
             builder.assert_bool(bit);
             reconstructed += AB::Expr::from_u32(1 << (31 - i)) * bit;
         }
 
         // value-binding: the range-checked gap == repid_score - threshold - 1 (public).
-        // Replaces the prior private-value binding (reconstructed == self.value), which the
-        // verifier could not check. Now the proof is tied to the public statement.
+        // With the gap proven < 2^16 << p, this equality holds over the integers only when
+        // repid > threshold — a wrapped (negative) gap would be >= 2^16 and is rejected above.
         builder
             .when_first_row()
             .assert_eq(reconstructed, repid.into() - threshold.into() - AB::Expr::ONE);
@@ -305,5 +303,77 @@ mod tests {
         let pv_lie = build_public_values(AGENT_A, threshold, 9999).unwrap();
         let res = verify(&config, &air, &proof, &pv_lie);
         assert!(res.is_err(), "verification with inflated repid_score MUST fail");
+    }
+
+    // BabyBear prime p = 2^31 - 2^27 + 1. A "negative" gap (repid <= threshold) is
+    // (repid - threshold - 1) mod p, i.e. ~p (high bits set). The 16-bit range check rejects it.
+    const BABYBEAR_P: u64 = (1u64 << 31) - (1u64 << 27) + 1;
+
+    /// Attempt to forge a proof for `repid`/`threshold` using a (possibly wrapped) gap value.
+    /// Returns true iff the forgery FAILS — either the prover cannot build it (constraints
+    /// unsatisfiable → panic under debug_assertions) or the verifier rejects it.
+    fn forgery_fails(agent: &str, threshold: u64, repid: u64, malicious_gap: u32) -> bool {
+        use std::panic;
+        let prev = panic::take_hook();
+        panic::set_hook(Box::new(|_| {})); // silence the expected unsatisfiable-constraint panic
+        let out = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            let config = test_config!();
+            let air = RepIdRangeCheckAir { value: malicious_gap };
+            let trace = generate_trace::<BabyBear>(malicious_gap);
+            let pv = build_public_values(agent, threshold, repid).unwrap();
+            let proof = prove(&config, &air, trace, &pv);
+            verify(&config, &air, &proof, &pv)
+        }));
+        panic::set_hook(prev);
+        match out {
+            Err(_) => true,       // prover could not satisfy constraints
+            Ok(Err(_)) => true,   // verifier rejected
+            Ok(Ok(())) => false,  // FORGERY ACCEPTED — soundness broken
+        }
+    }
+
+    #[test]
+    fn test_boundary_repid_eq_threshold_plus_one_passes() {
+        // gap = 0 is the smallest honest gap: repid = threshold + 1.
+        let threshold = 1000u64;
+        let repid = 1001u64;
+        let gap = (repid - threshold - 1) as u32; // 0
+        let config = test_config!();
+        let air = RepIdRangeCheckAir { value: gap };
+        let trace = generate_trace::<BabyBear>(gap);
+        let pv = build_public_values(AGENT_A, threshold, repid).unwrap();
+        let proof = prove(&config, &air, trace, &pv);
+        verify(&config, &air, &proof, &pv).expect("repid == threshold + 1 must verify (gap 0)");
+    }
+
+    #[test]
+    fn test_boundary_repid_eq_threshold_fails() {
+        // repid == threshold → honest gap would be -1 == p-1 (wrapped). Must be unforgeable.
+        assert!(
+            forgery_fails(AGENT_A, 1000, 1000, (BABYBEAR_P - 1) as u32),
+            "repid == threshold (wrapped gap p-1) MUST fail"
+        );
+    }
+
+    #[test]
+    fn test_wrapped_gap_p_minus_1_fails() {
+        // Explicit: gap field-element p-1 (== -1) with any equal repid/threshold is rejected
+        // because p-1 has high bits set (fails the 16-bit range check).
+        assert!(
+            forgery_fails(AGENT_A, 5000, 5000, (BABYBEAR_P - 1) as u32),
+            "wrapped gap = p-1 MUST fail the 16-bit range check"
+        );
+    }
+
+    #[test]
+    fn test_repid_below_threshold_fails() {
+        // repid < threshold by 500 → gap_real = -501 → wrapped = p-501 (high bits set).
+        let threshold = 1000u64;
+        let repid = 500u64;
+        let wrapped = (BABYBEAR_P - 501) as u32; // (repid - threshold - 1) mod p
+        assert!(
+            forgery_fails(AGENT_A, threshold, repid, wrapped),
+            "repid < threshold MUST fail"
+        );
     }
 }
