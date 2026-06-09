@@ -213,6 +213,27 @@ pub fn prove_range_check(
     Ok(proof_bytes)
 }
 
+
+/// B-2 — aggregation-ready Poseidon2/BabyBear LEAF (Invariant 1). A single BabyBear field element
+/// committing the postcard statement {agent_id, threshold, repid_score}, computed with the canonical
+/// `default_babybear_poseidon2_16()` permutation (NO hand-rolled constants). This is the leaf a future
+/// Plonky3 aggregation (PACKAGE tier) folds — sha256 commitments cannot be aggregated, Poseidon2 can.
+/// New proofs carry this leaf with scheme `poseidon2_babybear`; the 56,823 legacy sha256 rows are left
+/// untouched (`legacy_sha256` lineage). agent_id (16 bytes) is packed into 8 16-bit field elements
+/// (each < 2^31, canonical), then [those 8, threshold, repid] are Poseidon2-hashed.
+pub fn poseidon2_postcard_leaf(agent_id: &str, threshold: u64, repid_score: u64) -> String {
+    let bytes = agent_id_to_16_bytes(agent_id);
+    let mut inputs: Vec<u32> = Vec::with_capacity(10);
+    for i in 0..8 {
+        inputs.push(((bytes[2 * i] as u32) << 8) | (bytes[2 * i + 1] as u32)); // 16-bit felt < 2^31
+    }
+    inputs.push((threshold % (1u64 << 31)) as u32);
+    inputs.push((repid_score % (1u64 << 31)) as u32);
+    let p = babybear_leaf::poseidon2_16();
+    let leaf = babybear_leaf::hash(&p, &inputs);
+    format!("0x{:08x}", leaf)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,6 +273,20 @@ mod tests {
 
     const AGENT_A: &str = "394b6ee4-62e7-4c66-8445-29107b097b4c";
     const AGENT_B: &str = "942860a6-e26f-4334-ae94-b7c1abed1e8c";
+
+    #[test]
+    fn test_poseidon2_leaf_deterministic_and_agent_bound() {
+        // Deterministic (KAT-style stability) + binds agent_id: a different agent => different leaf.
+        let l1 = poseidon2_postcard_leaf(AGENT_A, 999, 2280);
+        let l1b = poseidon2_postcard_leaf(AGENT_A, 999, 2280);
+        let l2 = poseidon2_postcard_leaf(AGENT_B, 999, 2280);
+        let l3 = poseidon2_postcard_leaf(AGENT_A, 999, 2281); // different score
+        assert_eq!(l1, l1b, "leaf must be deterministic");
+        assert_ne!(l1, l2, "different agent_id must change the leaf");
+        assert_ne!(l1, l3, "different repid_score must change the leaf");
+        assert!(l1.starts_with("0x") && l1.len() == 10, "leaf is a single BabyBear felt hex");
+    }
+
 
     #[test]
     fn test_agent_bound_proof_round_trip() {
