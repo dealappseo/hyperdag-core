@@ -1,0 +1,17 @@
+# BabyBear identity leaf (B3) — pinned to canonical Plonky3 rev 27d59f7350 (CANON P-026 / Inv 5).
+# Standalone crate ([workspace] excludes it from any parent workspace). Uses the canonical
+# default_babybear_poseidon2_16() — NO hand-rolled constants. KAT-tested against 03_specs.
+[package]
+name = "babybear-leaf"
+version = "0.0.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+p3-baby-bear = { git = "https://github.com/Plonky3/Plonky3", rev = "27d59f7350daf6b02d11b01c3a55af453554b515" }
+p3-field     = { git = "https://github.com/Plonky3/Plonky3", rev = "27d59f7350daf6b02d11b01c3a55af453554b515" }
+p3-symmetric = { git = "https://github.com/Plonky3/Plonky3", rev = "27d59f7350daf6b02d11b01c3a55af453554b515" }
+
+[dev-dependencies]
+serde_json = "1"
