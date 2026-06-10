@@ -9,6 +9,7 @@ mod corpus;
 mod aggregate;
 mod letter;
 mod epoch;
+mod recursion_spike;
 
 use axum::{
     extract::{Path, State},
