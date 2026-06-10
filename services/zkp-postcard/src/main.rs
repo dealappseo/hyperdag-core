@@ -102,8 +102,16 @@ async fn fetch_agent_repid(
     // If it's 3747, 3748, etc., we might need to map it or it might be in the 'id' column as UUID-equivalent
     // The sample showed 'id' is UUID.
     
+    // BOOT HARDENING (2026-06-10): fail-loud (503) if Supabase isn't configured, instead of the boot
+    // panic that crash-looped the prover. A 503 here keeps the service up + /health green + the cause
+    // legible, and proving resumes the instant Sean sets SUPABASE_URL/SERVICE_KEY and redeploys.
+    if state.supabase_url.is_empty() || state.supabase_key.is_empty() {
+        eprintln!("[ZKP] proof request rejected: supabase_not_configured (set SUPABASE_URL/SERVICE_KEY)");
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+
     let url = format!("{}/rest/v1/repid_agents?id=eq.{}&select=current_repid,tier", state.supabase_url, agent_id);
-    
+
     let res = state.http_client
         .get(&url)
         .header("apikey", &state.supabase_key)
@@ -292,11 +300,22 @@ async fn main() {
     let store = Arc::new(RwLock::new(HashMap::new()));
     let http_client = reqwest::Client::new();
     
-    let supabase_url = std::env::var("SUPABASE_URL")
-        .expect("SUPABASE_URL must be set");
+    // BOOT HARDENING (2026-06-10): do NOT crash-loop when Supabase env is unset. The prover needs
+    // Supabase for the server-side RepID lookup, but a missing env var must fail-LOUD per request
+    // (503) rather than panic at boot — a crash-loop hides the service from /health and is hard to
+    // diagnose on Railway (this is exactly what took the keystone prover down, D-062). We log loudly,
+    // boot anyway so /health is reachable, and `fetch_agent_repid` returns 503 until the env is set.
+    let supabase_url = std::env::var("SUPABASE_URL").unwrap_or_default();
     let supabase_key = std::env::var("SUPABASE_SERVICE_KEY")
         .or_else(|_| std::env::var("SUPABASE_SERVICE_ROLE_KEY"))
-        .expect("SUPABASE_SERVICE_KEY or SUPABASE_SERVICE_ROLE_KEY must be set");
+        .unwrap_or_default();
+    if supabase_url.is_empty() || supabase_key.is_empty() {
+        eprintln!(
+            "[ZKP][BOOT][WARN] SUPABASE_URL and/or SUPABASE_SERVICE_KEY(/_ROLE_KEY) are UNSET — \
+             the prover will boot and serve /health, but proof requests will return 503 \
+             (supabase_not_configured) until they are set. Set them on Railway and redeploy."
+        );
+    }
 
     let state = Arc::new(AppState {
         store,
