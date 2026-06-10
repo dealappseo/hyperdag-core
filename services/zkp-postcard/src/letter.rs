@@ -296,4 +296,48 @@ mod tests {
             "wrong agent rejected"
         );
     }
+
+    // ── XC RED-TEAM FIXTURES (E:\dev\reports\2026-06-10\XC_REDTEAM_AGG_LETTER_AND_CHALLENGE.md) ──
+    // XC attacked letter.rs @ fa0eacd. (c) hiding and (d) fold HELD (covered above + in aggregate.rs).
+    // (a) and (b) BROKE — encoded here as adversarial regression fixtures. They assert the CURRENT
+    // (vulnerable) behavior, so they pass today and DOCUMENT the limitation; the moment the fix lands
+    // (in-AIR commitment binding / a wider multi-felt commitment / #95's HidingFriPcs — XC P3) these
+    // collisions disappear and the asserts below must be inverted. That forced edit is the tripwire
+    // that keeps the limitation from being silently shipped as "the score is hidden + bound."
+    //
+    // ⚠️ KNOWN LIMITATION (do NOT market LETTER's commitment as collision-resistant until fixed):
+    //   score_commitment reduces BOTH inputs `% 2^31` (BabyBear is ~31-bit), and the (repid,nonce)→
+    //   commitment link is witness-level, not an in-AIR constraint. The STARK still soundly proves
+    //   repid > threshold and the score stays private (hiding held); but the *commitment* is forgeable.
+
+    #[test]
+    fn redteam_a_nonce_entropy_capped_at_31_bits() {
+        // XC P2(a): a "full-width" production nonce is silently reduced to 31 bits, so two DISTINCT
+        // nonces collide to the same commitment. Effective nonce entropy ≤ 31 bits regardless of caller.
+        assert_eq!(
+            score_commitment(REPID, NONCE),
+            score_commitment(REPID, NONCE + (1u64 << 31)),
+            "BROKEN-AS-DESIGNED: nonce reduced mod 2^31 → distinct nonces collide (XC P2a). \
+             Invert this assert when the commitment widens / binds in-AIR."
+        );
+        // The reduction is unconditional:
+        assert_eq!(score_commitment(REPID, NONCE), score_commitment(REPID, NONCE % (1u64 << 31)));
+    }
+
+    #[test]
+    fn redteam_b_commitment_forgeable_via_reduction() {
+        // XC P2(b): a different (repid', nonce') reaches the SAME commitment — the binding is not
+        // enforced in-circuit, and the 31-bit reduction guarantees alternative preimages exist.
+        let target = score_commitment(REPID, NONCE);
+        // Forge 1 — different nonce (score unchanged): n' = n + 2^31.
+        let forge_nonce = NONCE + (1u64 << 31);
+        assert_ne!(forge_nonce, NONCE);
+        assert_eq!(score_commitment(REPID, forge_nonce), target, "forged different nonce → same commitment (XC P2b)");
+        // Forge 2 — different score ARGUMENT (reduces equal): r' = repid + 2^31 maps to the same felt.
+        let forge_score = REPID + (1u64 << 31);
+        assert_ne!(forge_score, REPID);
+        assert_eq!(score_commitment(forge_score, NONCE), target, "forged different score-arg → same commitment (XC P2b)");
+        // The ONLY thing standing between this forge and acceptance is the issuer's witness-level
+        // recompute — there is no in-AIR constraint tying the public commitment to the proven repid.
+    }
 }
