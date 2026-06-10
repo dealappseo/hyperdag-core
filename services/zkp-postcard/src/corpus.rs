@@ -36,6 +36,7 @@ pub const REAL_AGENTS: &[(&str, &str, u64)] = &[
     ("trinity-orch", "84f2d7de-5bb9-4f3b-92ca-aecc7c498271", 1000),
     ("trinity-veritas", "a83cc9eb-43b0-49ee-9e45-2ecbb0d35067", 1000),
     ("trinity-hdm", "f93cdbbe-2337-48b3-8bfd-b5b7a5c2b5c0", 1000),
+    ("trinity-dry_run_agent", "0d276b35-d8b2-4896-b206-95e1a95eedfc", 1000),
     ("HUMAN-2557", "25574cdd-ac93-4ad3-a9c9-7bdaa7430d2d", 1000),
     ("HUMAN-f436", "f4367518-a2a2-4dec-8193-1a259f3640f4", 916),
     ("SKEPTIC", "2538b7ed-acdb-4423-b5bf-a9e18069ec99", 834),
@@ -73,12 +74,73 @@ pub struct CorpusEntry {
     pub proof_sha256: String,
 }
 
+/// A statement the circuit MUST refuse to prove (the negative boundary). No proof exists; the
+/// manifest records why, and `verify_corpus_sample` asserts `prove_entry` returns Err — so a dev
+/// can reproduce "I tried to prove this and it correctly failed."
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NegativeCase {
+    pub label: String,
+    pub agent_id: String,
+    pub repid_score: u64,
+    pub threshold: u64,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Corpus {
     pub plonky3_pin: String,
     pub num_public_values: usize,
     pub note: String,
+    /// Real roster × tier-floor thresholds.
     pub entries: Vec<CorpusEntry>,
+    /// Provable edge cases: smallest gap, RepID cap, the 16-bit range edge.
+    pub boundary_entries: Vec<CorpusEntry>,
+    /// Statements the circuit must REFUSE (repid==threshold, repid<threshold, gap>=2^16).
+    pub negative_cases: Vec<NegativeCase>,
+}
+
+/// The RepID cap (CLAUDE.md canonical: scores clamp to [10, 10000]).
+const REPID_CAP: u64 = 10_000;
+/// MEDIATOR — a real agent_id reused for the synthetic circuit-edge boundaries (the values exceed
+/// real RepID but exercise the circuit's 16-bit range edge; clearly labeled as circuit boundaries).
+const EDGE_AGENT: &str = "394b6ee4-62e7-4c66-8445-29107b097b4c";
+
+/// Provable boundary statements (each DOES prove — recorded with real proof_sha256).
+fn boundary_statements() -> Vec<(&'static str, &'static str, u64, u64)> {
+    vec![
+        // (label-ish via agent_name reuse, agent_id, repid, threshold)
+        ("min-gap-zero", EDGE_AGENT, 1, 0),                 // gap = 0 (repid = threshold+1), smallest positive
+        ("repid-cap-max", EDGE_AGENT, REPID_CAP, REPID_CAP - 1), // repid at the 10000 cap, gap 0
+        ("repid-cap-vs-zero", EDGE_AGENT, REPID_CAP, 0),   // repid cap vs threshold 0 → gap 9999
+        ("range-edge-16bit", EDGE_AGENT, 65_536, 0),       // gap = 65535 = 2^16 - 1, the 16-bit upper edge (still proves)
+    ]
+}
+
+/// Unprovable boundary statements (each MUST fail — no proof).
+fn negative_statements() -> Vec<NegativeCase> {
+    vec![
+        NegativeCase {
+            label: "repid-eq-threshold".into(),
+            agent_id: EDGE_AGENT.into(),
+            repid_score: 2280,
+            threshold: 2280,
+            reason: "repid == threshold → gap would be -1 (no satisfying witness); fail-closed".into(),
+        },
+        NegativeCase {
+            label: "repid-below-threshold".into(),
+            agent_id: EDGE_AGENT.into(),
+            repid_score: 500,
+            threshold: 1000,
+            reason: "repid < threshold → not a positive statement; the wrapped negative gap is rejected by the 16-bit range check".into(),
+        },
+        NegativeCase {
+            label: "gap-at-2^16".into(),
+            agent_id: EDGE_AGENT.into(),
+            repid_score: 65_537,
+            threshold: 0,
+            reason: "gap = 65536 = 2^16 is out of the 16-bit range (assumption repid-threshold < 65536); fail-closed".into(),
+        },
+    ]
 }
 
 /// Meaningful thresholds strictly below `repid`: tier floors + a tight boundary (repid-1).
@@ -125,7 +187,7 @@ pub fn prove_entry(
     ))
 }
 
-/// Generate the full corpus (every agent × its thresholds). Deterministic.
+/// Generate the full corpus (every agent × its thresholds + boundary + negative cases). Deterministic.
 pub fn generate() -> Corpus {
     let mut entries = Vec::new();
     for (name, id, repid) in REAL_AGENTS {
@@ -134,13 +196,30 @@ pub fn generate() -> Corpus {
             entries.push(entry);
         }
     }
+    let mut boundary_entries = Vec::new();
+    for (label, id, repid, threshold) in boundary_statements() {
+        let (mut entry, _proof) = prove_entry(label, id, repid, threshold).expect("boundary statement proves");
+        entry.agent_name = label.to_string();
+        boundary_entries.push(entry);
+    }
+    // Sanity: the negative cases truly cannot be proven (recorded with no proof bytes).
+    for nc in negative_statements() {
+        assert!(
+            prove_entry(&nc.label, &nc.agent_id, nc.repid_score, nc.threshold).is_err(),
+            "negative case {} unexpectedly proved",
+            nc.label
+        );
+    }
     Corpus {
         plonky3_pin: "27d59f7350daf6b02d11b01c3a55af453554b515".to_string(),
         num_public_values: circuit::NUM_PUBLIC_VALUES,
-        note: "Real Plonky3 STARK postcard proofs over real Trinity-prod agents (sql:2026-06-10). \
-               Each proof_sha256 is reproducible from the pinned, deterministic prover."
+        note: "Real Plonky3 STARK postcard proofs over the full active Trinity-prod roster \
+               (sql:2026-06-10) + provable boundary edges + unprovable negative cases. Every \
+               proof_sha256 is reproducible from the pinned, deterministic prover."
             .to_string(),
         entries,
+        boundary_entries,
+        negative_cases: negative_statements(),
     }
 }
 
@@ -205,6 +284,24 @@ mod tests {
             let sha = hex::encode(Sha256::digest(&proof));
             assert_eq!(sha, e.proof_sha256, "proof bytes not reproducible for {} t={}", e.agent_name, e.threshold);
         }
+
+        // Boundary edges: each provable edge regenerates byte-identically.
+        assert!(corpus.boundary_entries.len() >= 4, "expect the boundary edges");
+        for e in &corpus.boundary_entries {
+            let (_regen, proof) = prove_entry(&e.agent_name, &e.agent_id, e.repid_score, e.threshold).unwrap();
+            let sha = hex::encode(Sha256::digest(&proof));
+            assert_eq!(sha, e.proof_sha256, "boundary proof not reproducible: {}", e.agent_name);
+        }
+
+        // Negative cases: each MUST still be unprovable (the circuit refuses).
+        assert!(!corpus.negative_cases.is_empty(), "expect negative cases");
+        for nc in &corpus.negative_cases {
+            assert!(
+                prove_entry(&nc.label, &nc.agent_id, nc.repid_score, nc.threshold).is_err(),
+                "negative case {} unexpectedly proved",
+                nc.label
+            );
+        }
     }
 
     /// Full reproducibility: regenerate EVERY proof and assert sha256 match. Slow → `#[ignore]`.
@@ -213,11 +310,17 @@ mod tests {
     fn verify_corpus_full() {
         let raw = std::fs::read_to_string(vectors_path()).expect("corpus.json committed");
         let corpus: Corpus = serde_json::from_str(&raw).unwrap();
-        for e in &corpus.entries {
+        for e in corpus.entries.iter().chain(corpus.boundary_entries.iter()) {
             let (_regen, proof) = prove_entry(&e.agent_name, &e.agent_id, e.repid_score, e.threshold).unwrap();
             let sha = hex::encode(Sha256::digest(&proof));
             assert_eq!(sha, e.proof_sha256, "proof not reproducible for {} t={}", e.agent_name, e.threshold);
         }
-        eprintln!("verified {} proofs reproduce byte-identically", corpus.entries.len());
+        for nc in &corpus.negative_cases {
+            assert!(prove_entry(&nc.label, &nc.agent_id, nc.repid_score, nc.threshold).is_err(), "negative {} proved", nc.label);
+        }
+        eprintln!(
+            "verified {} + {} boundary proofs reproduce byte-identically, {} negatives refused",
+            corpus.entries.len(), corpus.boundary_entries.len(), corpus.negative_cases.len()
+        );
     }
 }

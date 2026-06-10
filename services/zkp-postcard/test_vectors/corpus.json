@@ -1,7 +1,7 @@
 {
   "plonky3_pin": "27d59f7350daf6b02d11b01c3a55af453554b515",
   "num_public_values": 18,
-  "note": "Real Plonky3 STARK postcard proofs over real Trinity-prod agents (sql:2026-06-10). Each proof_sha256 is reproducible from the pinned, deterministic prover.",
+  "note": "Real Plonky3 STARK postcard proofs over the full active Trinity-prod roster (sql:2026-06-10) + provable boundary edges + unprovable negative cases. Every proof_sha256 is reproducible from the pinned, deterministic prover.",
   "entries": [
     {
       "agent_name": "MEDIATOR",
@@ -902,6 +902,66 @@
       "leaf": "0x32f6172a",
       "proof_size_bytes": 10673,
       "proof_sha256": "7a72568fdd5fe6bd982bff2326984cc084e731d08cdf60c4032fc5b6e3a55850"
+    },
+    {
+      "agent_name": "trinity-dry_run_agent",
+      "agent_id": "0d276b35-d8b2-4896-b206-95e1a95eedfc",
+      "repid_score": 1000,
+      "threshold": 0,
+      "gap": 999,
+      "leaf": "0x70bb5a5e",
+      "proof_size_bytes": 10673,
+      "proof_sha256": "1be751ee6d3cf030973166082fbfb05326c1ec232e429b67efaf71529bd617fd"
+    },
+    {
+      "agent_name": "trinity-dry_run_agent",
+      "agent_id": "0d276b35-d8b2-4896-b206-95e1a95eedfc",
+      "repid_score": 1000,
+      "threshold": 100,
+      "gap": 899,
+      "leaf": "0x75ae5571",
+      "proof_size_bytes": 10673,
+      "proof_sha256": "3c0793cc87114eba60944d2d2b04b59126d108c4179924a6e7ab0e6eb07839b3"
+    },
+    {
+      "agent_name": "trinity-dry_run_agent",
+      "agent_id": "0d276b35-d8b2-4896-b206-95e1a95eedfc",
+      "repid_score": 1000,
+      "threshold": 250,
+      "gap": 749,
+      "leaf": "0x6d514796",
+      "proof_size_bytes": 10673,
+      "proof_sha256": "9ae570f4768432ee8eecf6e741920aa68a29c610ca5825044992e97693a266f9"
+    },
+    {
+      "agent_name": "trinity-dry_run_agent",
+      "agent_id": "0d276b35-d8b2-4896-b206-95e1a95eedfc",
+      "repid_score": 1000,
+      "threshold": 499,
+      "gap": 500,
+      "leaf": "0x14f16a44",
+      "proof_size_bytes": 10673,
+      "proof_sha256": "c86e6a50c12c84576ef8df9d96d0f8574fa79003f491e8e0e269ef41b23c2523"
+    },
+    {
+      "agent_name": "trinity-dry_run_agent",
+      "agent_id": "0d276b35-d8b2-4896-b206-95e1a95eedfc",
+      "repid_score": 1000,
+      "threshold": 500,
+      "gap": 499,
+      "leaf": "0x49b4bb9f",
+      "proof_size_bytes": 10673,
+      "proof_sha256": "4d6fbe2fca73b41461d0e4341d6ee105a7080fa950e08a5d421689a177078873"
+    },
+    {
+      "agent_name": "trinity-dry_run_agent",
+      "agent_id": "0d276b35-d8b2-4896-b206-95e1a95eedfc",
+      "repid_score": 1000,
+      "threshold": 999,
+      "gap": 0,
+      "leaf": "0x67857f97",
+      "proof_size_bytes": 10673,
+      "proof_sha256": "e3611914331bf9851ba78213d01edad0e5f558638ebee0726808ad68e9a1ef9c"
     },
     {
       "agent_name": "HUMAN-2557",
@@ -1822,6 +1882,71 @@
       "leaf": "0x4ce1a142",
       "proof_size_bytes": 10673,
       "proof_sha256": "66f9c889dedd87bd5086c017700794b94251ce5307712f110bccafaa534a4ef1"
+    }
+  ],
+  "boundary_entries": [
+    {
+      "agent_name": "min-gap-zero",
+      "agent_id": "394b6ee4-62e7-4c66-8445-29107b097b4c",
+      "repid_score": 1,
+      "threshold": 0,
+      "gap": 0,
+      "leaf": "0x4bbada73",
+      "proof_size_bytes": 10673,
+      "proof_sha256": "ac26701551c43ecf6d144cdb4f20e862f2649834612edd134f0d0ee10ffad560"
+    },
+    {
+      "agent_name": "repid-cap-max",
+      "agent_id": "394b6ee4-62e7-4c66-8445-29107b097b4c",
+      "repid_score": 10000,
+      "threshold": 9999,
+      "gap": 0,
+      "leaf": "0x6889ef52",
+      "proof_size_bytes": 10673,
+      "proof_sha256": "fd03b09fd2426051d7fb7ce1c2c939707e269ec93797941686a0488e39789b10"
+    },
+    {
+      "agent_name": "repid-cap-vs-zero",
+      "agent_id": "394b6ee4-62e7-4c66-8445-29107b097b4c",
+      "repid_score": 10000,
+      "threshold": 0,
+      "gap": 9999,
+      "leaf": "0x46314aab",
+      "proof_size_bytes": 10673,
+      "proof_sha256": "b31c28b7b99b8d9eba882856288c4912927ef04942724376ff583c7a415534ba"
+    },
+    {
+      "agent_name": "range-edge-16bit",
+      "agent_id": "394b6ee4-62e7-4c66-8445-29107b097b4c",
+      "repid_score": 65536,
+      "threshold": 0,
+      "gap": 65535,
+      "leaf": "0x16619ba2",
+      "proof_size_bytes": 10673,
+      "proof_sha256": "cdf2819c82b192a2a9836df6d13ad265f4854a21e82447dd4e74140a12c3cce3"
+    }
+  ],
+  "negative_cases": [
+    {
+      "label": "repid-eq-threshold",
+      "agent_id": "394b6ee4-62e7-4c66-8445-29107b097b4c",
+      "repid_score": 2280,
+      "threshold": 2280,
+      "reason": "repid == threshold → gap would be -1 (no satisfying witness); fail-closed"
+    },
+    {
+      "label": "repid-below-threshold",
+      "agent_id": "394b6ee4-62e7-4c66-8445-29107b097b4c",
+      "repid_score": 500,
+      "threshold": 1000,
+      "reason": "repid < threshold → not a positive statement; the wrapped negative gap is rejected by the 16-bit range check"
+    },
+    {
+      "label": "gap-at-2^16",
+      "agent_id": "394b6ee4-62e7-4c66-8445-29107b097b4c",
+      "repid_score": 65537,
+      "threshold": 0,
+      "reason": "gap = 65536 = 2^16 is out of the 16-bit range (assumption repid-threshold < 65536); fail-closed"
     }
   ]
 }
