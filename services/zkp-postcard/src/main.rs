@@ -69,6 +69,11 @@ struct ProofResponse {
     repid_score_actual: u64,
     repid_score_supplied: Option<u64>,
     score_source: String,
+    // B-2: aggregation-ready Poseidon2/BabyBear leaf (Invariant 1) + its scheme tag. The engine
+    // stores this as the new commitment lineage (scheme='poseidon2_babybear'); legacy sha256 rows
+    // are left untouched. Empty for the sha256 fallback path.
+    poseidon2_leaf: String,
+    leaf_scheme: String,
 }
 
 #[derive(Serialize)]
@@ -224,6 +229,13 @@ async fn generate_proof(
     let proof_size = proof_bytes.len();
     let proof_bytes_str = base64::engine::general_purpose::STANDARD.encode(&proof_bytes);
 
+    // B-2: compute the Poseidon2/BabyBear aggregation-ready leaf for real proofs only.
+    let (poseidon2_leaf, leaf_scheme) = if proof_type == "plonky3_range_check" {
+        (circuit::poseidon2_postcard_leaf(&agent_id, threshold, repid), "poseidon2_babybear".to_string())
+    } else {
+        (String::new(), String::new())
+    };
+
     let proving_time = start.elapsed().as_millis() as u64;
 
     let record = ProofRecord {
@@ -254,6 +266,8 @@ async fn generate_proof(
         repid_score_actual: repid,
         repid_score_supplied: req.repid_score,
         score_source: "server_side_lookup".into(),
+        poseidon2_leaf,
+        leaf_scheme,
     }))
 }
 
