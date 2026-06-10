@@ -274,6 +274,31 @@ mod tests {
     const AGENT_A: &str = "394b6ee4-62e7-4c66-8445-29107b097b4c";
     const AGENT_B: &str = "942860a6-e26f-4334-ae94-b7c1abed1e8c";
 
+    // Frozen golden leaves (B-2 KAT, Invariant 1). Computed once from the pinned Poseidon2-16
+    // permutation (Plonky3 27d59f7350daf6b02d11b01c3a55af453554b515) and FROZEN here as a
+    // known-answer test. If the leaf encoding, the pin, or `default_babybear_poseidon2_16`
+    // ever changes, these assertions break — that is the aggregation-compatibility tripwire
+    // (a silent leaf change would split the Poseidon2 lineage and make PACKAGE-tier folds
+    // unverifiable against already-persisted leaves). The WASM verifier / aggregator MUST
+    // reproduce these exact values from the same statement.
+    const GOLDEN_LEAF_A_999_2280: &str = "0x32ed1341"; // poseidon2_postcard_leaf(AGENT_A, 999, 2280)
+    const GOLDEN_LEAF_B_999_2280: &str = "0x669d7ab7"; // poseidon2_postcard_leaf(AGENT_B, 999, 2280)
+
+    #[test]
+    fn test_poseidon2_leaf_golden_kat() {
+        // Known-answer: the leaf for a fixed statement is byte-stable across builds/machines.
+        assert_eq!(
+            poseidon2_postcard_leaf(AGENT_A, 999, 2280),
+            GOLDEN_LEAF_A_999_2280,
+            "leaf encoding or Poseidon2 pin drifted — aggregation lineage would split"
+        );
+        assert_eq!(
+            poseidon2_postcard_leaf(AGENT_B, 999, 2280),
+            GOLDEN_LEAF_B_999_2280,
+            "leaf encoding or Poseidon2 pin drifted — aggregation lineage would split"
+        );
+    }
+
     #[test]
     fn test_poseidon2_leaf_deterministic_and_agent_bound() {
         // Deterministic (KAT-style stability) + binds agent_id: a different agent => different leaf.
@@ -281,9 +306,11 @@ mod tests {
         let l1b = poseidon2_postcard_leaf(AGENT_A, 999, 2280);
         let l2 = poseidon2_postcard_leaf(AGENT_B, 999, 2280);
         let l3 = poseidon2_postcard_leaf(AGENT_A, 999, 2281); // different score
+        let l4 = poseidon2_postcard_leaf(AGENT_A, 1000, 2280); // different threshold
         assert_eq!(l1, l1b, "leaf must be deterministic");
         assert_ne!(l1, l2, "different agent_id must change the leaf");
         assert_ne!(l1, l3, "different repid_score must change the leaf");
+        assert_ne!(l1, l4, "different threshold must change the leaf");
         assert!(l1.starts_with("0x") && l1.len() == 10, "leaf is a single BabyBear felt hex");
     }
 

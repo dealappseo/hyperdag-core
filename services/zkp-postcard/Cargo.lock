@@ -96,6 +96,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "babybear-leaf"
+version = "0.0.0"
+dependencies = [
+ "p3-baby-bear",
+ "p3-field",
+ "p3-symmetric",
+]
+
+[[package]]
 name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2405,6 +2414,7 @@ name = "zkp-postcard"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "babybear-leaf",
  "base64",
  "bincode",
  "chrono",

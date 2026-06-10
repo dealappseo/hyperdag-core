@@ -15,5 +15,12 @@ COMMENT ON COLUMN zkp_circuits.domain IS 'Circuit namespace: postcard|letter|pac
 ALTER TABLE repid_zkp_proofs ADD COLUMN IF NOT EXISTS leaf_scheme text;  -- 'poseidon2_babybear' (new) | 'legacy_sha256'
 COMMENT ON COLUMN repid_zkp_proofs.leaf_scheme IS 'Leaf hash lineage (B-2, Inv-1): poseidon2_babybear = aggregation-ready; legacy_sha256 = pre-migration, not aggregatable.';
 
+-- Store the aggregation leaf value itself. It is deterministic-by-design over the statement
+-- {agent_id, threshold, repid_score} (that determinism is exactly what lets a future PACKAGE-tier
+-- Plonky3 fold it) — so it is NOT the row's unique id (zk_commitment stays nonce-bound for that).
+-- A single BabyBear field element, hex (e.g. '0x1a2b3c4d'). NULL for legacy sha256 rows.
+ALTER TABLE repid_zkp_proofs ADD COLUMN IF NOT EXISTS poseidon2_leaf text;
+COMMENT ON COLUMN repid_zkp_proofs.poseidon2_leaf IS 'Aggregation-ready Poseidon2/BabyBear leaf (B-2, Inv-1) over {agent_id,threshold,repid_score}; single felt hex; the value a PACKAGE-tier proof aggregates. NULL for legacy_sha256 rows.';
+
 -- Mark the legacy sha256 rows (no proof rewrite — clean Poseidon2 lineage starts fresh):
 UPDATE repid_zkp_proofs SET leaf_scheme = 'legacy_sha256' WHERE scheme IS NULL AND leaf_scheme IS NULL;
