@@ -133,6 +133,12 @@ fn agent_id_to_16_bytes(agent_id: &str) -> [u8; 16] {
     arr
 }
 
+/// Public accessor for the canonical agent_id→16-byte encoding (used by the LETTER tier so its
+/// agent-binding is byte-identical to POSTCARD's).
+pub fn agent_id_to_16_bytes_pub(agent_id: &str) -> [u8; 16] {
+    agent_id_to_16_bytes(agent_id)
+}
+
 /// Build the canonical 18-element public-values vector for the statement
 /// {agent_id, threshold, repid_score}. Both threshold and repid_score must be < 2^31
 /// (well above the 0..=10000 RepID range), guaranteeing valid single-element encodings.
@@ -222,6 +228,13 @@ pub fn prove_range_check(
 /// untouched (`legacy_sha256` lineage). agent_id (16 bytes) is packed into 8 16-bit field elements
 /// (each < 2^31, canonical), then [those 8, threshold, repid] are Poseidon2-hashed.
 pub fn poseidon2_postcard_leaf(agent_id: &str, threshold: u64, repid_score: u64) -> String {
+    format!("0x{:08x}", poseidon2_postcard_leaf_felt(agent_id, threshold, repid_score))
+}
+
+/// Same leaf as `poseidon2_postcard_leaf` but returns the raw BabyBear field element (u32) —
+/// the form a PACKAGE-tier Merkle fold / aggregation consumes. The hex variant is just
+/// `0x{:08x}` of this, so the frozen golden KAT continues to pin both.
+pub fn poseidon2_postcard_leaf_felt(agent_id: &str, threshold: u64, repid_score: u64) -> u32 {
     let bytes = agent_id_to_16_bytes(agent_id);
     let mut inputs: Vec<u32> = Vec::with_capacity(10);
     for i in 0..8 {
@@ -230,8 +243,7 @@ pub fn poseidon2_postcard_leaf(agent_id: &str, threshold: u64, repid_score: u64)
     inputs.push((threshold % (1u64 << 31)) as u32);
     inputs.push((repid_score % (1u64 << 31)) as u32);
     let p = babybear_leaf::poseidon2_16();
-    let leaf = babybear_leaf::hash(&p, &inputs);
-    format!("0x{:08x}", leaf)
+    babybear_leaf::hash(&p, &inputs)
 }
 
 #[cfg(test)]

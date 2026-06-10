@@ -5,6 +5,9 @@
 //! Private input: actual RepID score. Public output: commitment + proof that score > threshold.
 
 mod circuit;
+mod corpus;
+mod aggregate;
+mod letter;
 
 use axum::{
     extract::{Path, State},
