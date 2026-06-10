@@ -8,6 +8,7 @@ mod circuit;
 mod corpus;
 mod aggregate;
 mod letter;
+mod epoch;
 
 use axum::{
     extract::{Path, State},
