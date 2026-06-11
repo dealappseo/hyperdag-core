@@ -37,5 +37,8 @@ base64 = "0.22"
 reqwest = { version = "0.12", features = ["json"] }
 futures = "0.3"
 # B-2: Poseidon2/BabyBear leaf (Invariant 1) — aggregation-ready commitment for NEW proofs.
-# Path dep on the canonical, KAT-tested leaf crate (same Plonky3 pin 27d59f7350, Invariant 5).
-babybear-leaf = { path = "../babybear-leaf" }
+# VENDORED inside the crate dir (not `../babybear-leaf`) so the leaf is INSIDE the Railway
+# Docker build context (Root Directory = services/zkp-postcard). A sibling path dep was
+# unreachable from the build context → "failed to read /babybear-leaf/Cargo.toml" build
+# failure (2026-06-11). Still the canonical, KAT-tested leaf crate, same Plonky3 pin 27d59f7350.
+babybear-leaf = { path = "babybear-leaf" }

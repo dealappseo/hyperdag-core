@@ -1,3 +1,5 @@
 target/
 target_v2/
 *.json
+# Exempt the vendored leaf's golden KAT vector from the broad *.json scratch-ignore above.
+!babybear-leaf/test-vectors/*.json
