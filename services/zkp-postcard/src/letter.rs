@@ -123,21 +123,35 @@ fn letter_config(mmcs_rng: SmallRng, pcs_rng: SmallRng) -> LConfig {
     LConfig::new(pcs, challenger)
 }
 
-/// Public-value layout for LETTER (18 elements — same width as POSTCARD, score swapped for commitment):
-///   [0..16] agent_id (16 bytes), [16] threshold, [17] score_commitment.
+/// Public-value layout for LETTER (19 elements — 2026-06-11 multi-felt commitment):
+///   [0..16] agent_id (16 bytes), [16] threshold, [17] commitment.0, [18] commitment.1.
 /// The score is NOT present.
-pub const LETTER_NUM_PUBLIC_VALUES: usize = 18;
+pub const LETTER_NUM_PUBLIC_VALUES: usize = 19;
 const LPUB_THRESHOLD: usize = 16;
-const LPUB_COMMITMENT: usize = 17;
+const LPUB_COMMIT0: usize = 17;
+const LPUB_COMMIT1: usize = 18;
+/// Domain separator folded into the commitment input.
+const COMMIT_DOMAIN: u32 = 0x4c54_5231; // "LTR1"
 
 const LETTER_WIDTH: usize = 33; // [0..32]=gap bits, [32]=repid (PRIVATE witness column)
 const LCOL_REPID: usize = 32;
 
-/// score_commitment = Poseidon2(repid_score, nonce). The nonce is the hiding secret; it must be
-/// high-entropy (a field element here; production draws a full-width secret). Deterministic.
-pub fn score_commitment(repid_score: u64, nonce: u64) -> u32 {
+/// MULTI-FELT score commitment (2026-06-11 fix for the XC red-team 31-bit collision): the first TWO
+/// outputs of Poseidon2([repid, nonce_lo, nonce_hi, COMMIT_DOMAIN, 0..]). The nonce is a **u128** split
+/// into two 31-bit field elements (`nonce_lo || nonce_hi`, 62-bit), and the commitment is two field
+/// elements (62-bit). A `nonce + 2^31` no longer collides (it changes `nonce_hi`), and finding ANY
+/// alternative preimage is a ~62-bit search instead of trivial — killing XC P2(a)/(b). The (repid,nonce)
+/// → commitment link is STILL witness-level (in-AIR Poseidon2 opening is the separate G2-followup using
+/// p3-poseidon2-air, machinery confirmed present at the pin). Deterministic.
+pub fn score_commitment(repid_score: u64, nonce: u128) -> (u32, u32) {
     let p = babybear_leaf::poseidon2_16();
-    babybear_leaf::hash(&p, &[(repid_score % (1u64 << 31)) as u32, (nonce % (1u64 << 31)) as u32])
+    let mut st = [0u32; babybear_leaf::WIDTH];
+    st[0] = (repid_score % (1u64 << 31)) as u32;
+    st[1] = (nonce % (1u128 << 31)) as u32;
+    st[2] = ((nonce >> 31) % (1u128 << 31)) as u32;
+    st[3] = COMMIT_DOMAIN;
+    let out = babybear_leaf::permute16(&p, st);
+    (out[0], out[1])
 }
 
 pub struct RepIdLetterAir;
@@ -158,7 +172,7 @@ where
     fn eval(&self, builder: &mut AB) {
         let pis = builder.public_values();
         let threshold = pis[LPUB_THRESHOLD];
-        // NB: pis[LPUB_COMMITMENT] is bound via Fiat-Shamir (it is a public value) but is NOT
+        // NB: pis[LPUB_COMMIT0]/pis[LPUB_COMMIT1] are bound via Fiat-Shamir (public values) but are NOT
         // arithmetically constrained against the witnessed repid in-AIR — see module doc.
 
         let main = builder.main();
@@ -208,7 +222,7 @@ fn letter_trace<F: Field>(repid: u64, threshold: u64, rng: &mut SmallRng) -> Row
     RowMajorMatrix::new(values, LETTER_WIDTH)
 }
 
-fn letter_public_values(agent_id: &str, threshold: u64, commitment: u32) -> Result<Vec<BabyBear>, String> {
+fn letter_public_values(agent_id: &str, threshold: u64, commitment: (u32, u32)) -> Result<Vec<BabyBear>, String> {
     if threshold >= (1u64 << 31) {
         return Err("threshold out of field range".into());
     }
@@ -217,7 +231,8 @@ fn letter_public_values(agent_id: &str, threshold: u64, commitment: u32) -> Resu
         pv.push(BabyBear::new(b as u32));
     }
     pv.push(BabyBear::new(threshold as u32));
-    pv.push(BabyBear::new(commitment));
+    pv.push(BabyBear::new(commitment.0));
+    pv.push(BabyBear::new(commitment.1));
     debug_assert_eq!(pv.len(), LETTER_NUM_PUBLIC_VALUES);
     Ok(pv)
 }
@@ -227,13 +242,13 @@ pub struct LetterProof {
     pub proof_bytes: Vec<u8>,
     pub agent_id: String,
     pub threshold: u64,
-    pub score_commitment: u32,
+    pub score_commitment: (u32, u32),
 }
 
 /// Prove "repid_score > threshold" for `agent_id` WITHOUT revealing repid_score. The score and the
 /// commitment nonce are private witnesses; the public statement carries only
 /// {agent_id, threshold, score_commitment}.
-pub fn prove_letter(agent_id: &str, threshold: u64, repid_score: u64, nonce: u64) -> Result<LetterProof, String> {
+pub fn prove_letter(agent_id: &str, threshold: u64, repid_score: u64, nonce: u128) -> Result<LetterProof, String> {
     if repid_score <= threshold {
         return Err(format!("repid {} <= threshold {} (no positive statement)", repid_score, threshold));
     }
@@ -264,7 +279,7 @@ pub fn prove_letter(agent_id: &str, threshold: u64, repid_score: u64, nonce: u64
 
 /// Verify a LETTER proof against the public statement {agent_id, threshold, score_commitment}.
 /// The verifier never learns the score; it learns only that the hidden score exceeds threshold.
-pub fn verify_letter(proof_bytes: &[u8], agent_id: &str, threshold: u64, commitment: u32) -> Result<(), String> {
+pub fn verify_letter(proof_bytes: &[u8], agent_id: &str, threshold: u64, commitment: (u32, u32)) -> Result<(), String> {
     // Verification draws no randomness, so fixed seeds are correct and keep verify deterministic.
     let config = letter_config(SmallRng::seed_from_u64(0), SmallRng::seed_from_u64(0));
 
@@ -282,7 +297,7 @@ mod tests {
     const AGENT: &str = "394b6ee4-62e7-4c66-8445-29107b097b4c"; // MEDIATOR
     const REPID: u64 = 2280;
     const THRESHOLD: u64 = 999;
-    const NONCE: u64 = 1_234_567_890;
+    const NONCE: u128 = 0x1234_5678_9abc_def0_1234_5678; // full-width (>62-bit) secret nonce
 
     #[test]
     fn letter_proves_and_verifies_without_revealing_score() {
@@ -298,7 +313,8 @@ mod tests {
         let repid_felt = BabyBear::new(REPID as u32);
         assert!(!pv.contains(&repid_felt), "repid_score must NOT be a public value");
         assert_eq!(pv.len(), LETTER_NUM_PUBLIC_VALUES);
-        assert_eq!(pv[LPUB_COMMITMENT], BabyBear::new(commitment));
+        assert_eq!(pv[LPUB_COMMIT0], BabyBear::new(commitment.0));
+        assert_eq!(pv[LPUB_COMMIT1], BabyBear::new(commitment.1));
     }
 
     #[test]
@@ -330,7 +346,7 @@ mod tests {
             // Attacker tries the SAME nonce-free guessing they could mount: they do NOT know NONCE,
             // so the best they can do is guess (score) and hope a wrong-nonce commitment collides.
             // Model the attacker's lack of nonce by trying a fixed wrong nonce (0) for every guess.
-            if score_commitment(guess, 0) == commitment {
+            if score_commitment(guess, 0u128) == commitment {
                 recovered = Some(guess);
                 break;
             }
@@ -347,7 +363,7 @@ mod tests {
         // A proof for one commitment must not verify under a different commitment (binding).
         let lp = prove_letter(AGENT, THRESHOLD, REPID, NONCE).unwrap();
         assert!(
-            verify_letter(&lp.proof_bytes, AGENT, THRESHOLD, lp.score_commitment ^ 1).is_err(),
+            verify_letter(&lp.proof_bytes, AGENT, THRESHOLD, (lp.score_commitment.0 ^ 1, lp.score_commitment.1)).is_err(),
             "wrong commitment rejected"
         );
         // …and not under a different agent (agent-binding).
@@ -357,47 +373,31 @@ mod tests {
         );
     }
 
-    // ── XC RED-TEAM FIXTURES (E:\dev\reports\2026-06-10\XC_REDTEAM_AGG_LETTER_AND_CHALLENGE.md) ──
-    // XC attacked letter.rs @ fa0eacd. (c) hiding and (d) fold HELD (covered above + in aggregate.rs).
-    // (a) and (b) BROKE — encoded here as adversarial regression fixtures. They assert the CURRENT
-    // (vulnerable) behavior, so they pass today and DOCUMENT the limitation; the moment the fix lands
-    // (in-AIR commitment binding / a wider multi-felt commitment / #95's HidingFriPcs — XC P3) these
-    // collisions disappear and the asserts below must be inverted. That forced edit is the tripwire
-    // that keeps the limitation from being silently shipped as "the score is hidden + bound."
-    //
-    // ⚠️ KNOWN LIMITATION (do NOT market LETTER's commitment as collision-resistant until fixed):
-    //   score_commitment reduces BOTH inputs `% 2^31` (BabyBear is ~31-bit), and the (repid,nonce)→
-    //   commitment link is witness-level, not an in-AIR constraint. The STARK still soundly proves
-    //   repid > threshold and the score stays private (hiding held); but the *commitment* is forgeable.
+    // ── XC RED-TEAM FIXTURES — NOW INVERTED (the fix landed, 2026-06-11) ──
+    // XC attacked letter.rs @ fa0eacd: (a) nonce reduced to 31 bits → distinct nonces collided; (b) a
+    // different (repid', nonce') reached the same commitment. The multi-felt commitment over a 62-bit
+    // nonce CLOSES both: the asserts below were `assert_eq` (collision present) and are now `assert_ne`
+    // (collision gone) — the forced flip XC's tripwire demanded when the fix lands.
+    // STILL OPEN (separate G2 follow-up): the (repid,nonce)→commitment link remains witness-level; the
+    // in-AIR Poseidon2 opening (p3-poseidon2-air, machinery confirmed at the pin) binds it in-circuit.
 
     #[test]
-    fn redteam_a_nonce_entropy_capped_at_31_bits() {
-        // XC P2(a): a "full-width" production nonce is silently reduced to 31 bits, so two DISTINCT
-        // nonces collide to the same commitment. Effective nonce entropy ≤ 31 bits regardless of caller.
-        assert_eq!(
+    fn redteam_a_nonce_collision_closed() {
+        // XC P2(a) CLOSED: nonce is a 62-bit u128 (lo||hi); `NONCE + 2^31` changes nonce_hi → different
+        // commitment. The trivial 31-bit nonce collision no longer exists.
+        assert_ne!(
             score_commitment(REPID, NONCE),
-            score_commitment(REPID, NONCE + (1u64 << 31)),
-            "BROKEN-AS-DESIGNED: nonce reduced mod 2^31 → distinct nonces collide (XC P2a). \
-             Invert this assert when the commitment widens / binds in-AIR."
+            score_commitment(REPID, NONCE + (1u128 << 31)),
+            "FIXED: a 2^31 nonce shift must NOT collide now that the nonce is 62-bit"
         );
-        // The reduction is unconditional:
-        assert_eq!(score_commitment(REPID, NONCE), score_commitment(REPID, NONCE % (1u64 << 31)));
     }
 
     #[test]
-    fn redteam_b_commitment_forgeable_via_reduction() {
-        // XC P2(b): a different (repid', nonce') reaches the SAME commitment — the binding is not
-        // enforced in-circuit, and the 31-bit reduction guarantees alternative preimages exist.
+    fn redteam_b_commitment_collision_closed() {
+        // XC P2(b) CLOSED: the prior trivial alternative preimages no longer hit the same commitment.
         let target = score_commitment(REPID, NONCE);
-        // Forge 1 — different nonce (score unchanged): n' = n + 2^31.
-        let forge_nonce = NONCE + (1u64 << 31);
-        assert_ne!(forge_nonce, NONCE);
-        assert_eq!(score_commitment(REPID, forge_nonce), target, "forged different nonce → same commitment (XC P2b)");
-        // Forge 2 — different score ARGUMENT (reduces equal): r' = repid + 2^31 maps to the same felt.
-        let forge_score = REPID + (1u64 << 31);
-        assert_ne!(forge_score, REPID);
-        assert_eq!(score_commitment(forge_score, NONCE), target, "forged different score-arg → same commitment (XC P2b)");
-        // The ONLY thing standing between this forge and acceptance is the issuer's witness-level
-        // recompute — there is no in-AIR constraint tying the public commitment to the proven repid.
+        assert_ne!(score_commitment(REPID, NONCE + (1u128 << 31)), target, "FIXED: nonce+2^31 no longer forges");
+        // A different in-range score also yields a different commitment (no 31-bit score wrap collision).
+        assert_ne!(score_commitment(REPID + 1, NONCE), target, "different score → different commitment");
     }
 }
