@@ -42,3 +42,6 @@ futures = "0.3"
 # unreachable from the build context → "failed to read /babybear-leaf/Cargo.toml" build
 # failure (2026-06-11). Still the canonical, KAT-tested leaf crate, same Plonky3 pin 27d59f7350.
 babybear-leaf = { path = "babybear-leaf" }
+# B-2 LETTER hiding (HidingFriPcs): salt + random-codeword entropy for the zero-knowledge proof.
+# (SmallRng is unconditional in rand 0.10; default features provide OS seeding via make_rng.)
+rand = "0.10"

@@ -24,10 +24,17 @@
 //     the proof attests that hidden score > threshold; the verifier checks the proof + that the
 //     commitment matches the registry's published commitment for the agent.
 //
-// SCORE-HIDING (negative-tested): given {agent_id, threshold, commitment, proof}, the score is
-// unrecoverable — it is absent from the public values, and brute-forcing the small RepID space
-// (0..=10000) against the commitment fails without the secret nonce (Poseidon2 is one-way; each
-// guess needs the matching nonce, which the commitment does not leak).
+// SCORE-HIDING (B2 — now STRUCTURAL, not just "absent from public values"): given
+// {agent_id, threshold, commitment, proof}, the score is unrecoverable. Three layers:
+//   (1) the score is absent from the public values (it is a private witness);
+//   (2) the commitment Poseidon2(score, nonce) is one-way — brute-forcing the small RepID space
+//       (0..=10000) fails without the secret nonce;
+//   (3) the PROOF ITSELF is zero-knowledge: a hiding FRI PCS (salted Merkle MMCS + random
+//       codewords) closes the FRI query-opening leak, and random masking rows close the OOD
+//       trace-opening leak that a height-1 trace would otherwise have. See the config block below.
+// NOTE: layer (2)'s commitment is still 31-bit-reduced and witness-level-bound (see the XC
+// red-team fixtures + KNOWN LIMITATION in tests) — that is a SEPARATE fix (commitment widening /
+// in-AIR Poseidon2) and is NOT addressed by B2's HidingFriPcs change.
 
 #![allow(dead_code)]
 
@@ -37,16 +44,84 @@ use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_fri::FriParameters as FriConfig;
-use p3_keccak::Keccak256Hash;
+use p3_fri::{FriParameters as FriConfig, HidingFriPcs};
+use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
-use p3_merkle_tree::MerkleTreeMmcs;
+use p3_merkle_tree::MerkleTreeHidingMmcs;
 use p3_monty_31::dft::RecursiveDft;
-use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
+use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher};
 use p3_uni_stark::{prove, verify, StarkConfig};
+use rand::rngs::SmallRng;
+use rand::{RngExt, SeedableRng};
 
 use crate::circuit::agent_id_to_16_bytes_pub;
+
+// ── B2 HIDING STARK CONFIG (HidingFriPcs + salted MerkleTreeHidingMmcs + random codewords) ──
+// LETTER's witness (the score) must not leak from the proof. The plain TwoAdicFriPcs is NOT
+// zero-knowledge, and the LETTER trace is tiny, so two leaks had to be closed together:
+//   1. FRI query openings (in-domain LDE values) — closed by the SALTED MerkleTreeHidingMmcs plus
+//      `LETTER_NUM_RANDOM_CODEWORDS` random codewords folded into the FRI batch (HidingFriPcs).
+//   2. The out-of-domain (OOD) trace opening at zeta — for a height-1 trace the trace polynomials
+//      are CONSTANTS, so trace(zeta) == the witness exactly. Closed by padding the trace to
+//      `LETTER_TRACE_HEIGHT` with random MASKING rows (see `letter_trace`), making each
+//      witness-bearing column a high-degree polynomial whose evaluation at zeta is uniform.
+// Together these make LETTER's score-hiding STRUCTURAL, not merely "absent from public values."
+// This is Plonky3's canonical ZK path (mirrors uni-stark/tests/fib_air.rs + the poseidon2 ZK
+// example). The RNGs MUST be high-entropy & secret at proving time; at verify time they are never
+// drawn from (verification generates no randomness), so any seed verifies the same proof.
+type LVal = BabyBear;
+type LChallenge = BinomialExtensionField<LVal, 4>;
+type LByteHash = Keccak256Hash;
+type LU64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
+type LFieldHash = SerializingHasher<LU64Hash>;
+type LCompress = CompressionFunctionFromHasher<LU64Hash, 2, 4>;
+type LValMmcs = MerkleTreeHidingMmcs<
+    [LVal; p3_keccak::VECTOR_LEN],
+    [u64; p3_keccak::VECTOR_LEN],
+    LFieldHash,
+    LCompress,
+    SmallRng,
+    2,
+    4,
+    4,
+>;
+type LChallengeMmcs = ExtensionMmcs<LVal, LChallenge, LValMmcs>;
+type LDft = RecursiveDft<LVal>;
+type LPcs = HidingFriPcs<LVal, LDft, LValMmcs, LChallengeMmcs, SmallRng>;
+type LChallenger = SerializingChallenger32<LVal, HashChallenger<u8, LByteHash, 32>>;
+type LConfig = StarkConfig<LPcs, LChallenge, LChallenger>;
+
+/// Trace height (power of two). Row 0 is the real witness row; rows 1.. are random masking rows.
+const LETTER_TRACE_HEIGHT: usize = 8;
+/// Random codewords folded into the FRI batch by HidingFriPcs (matches Plonky3's ZK examples).
+const LETTER_NUM_RANDOM_CODEWORDS: usize = 4;
+
+/// Build the hiding STARK config. `mmcs_rng` salts the Merkle leaves; `pcs_rng` draws the random
+/// codewords — both are the hiding secret and MUST be high-entropy when proving. Verification draws
+/// no randomness, so a fixed seed there is correct and keeps verify deterministic.
+fn letter_config(mmcs_rng: SmallRng, pcs_rng: SmallRng) -> LConfig {
+    let byte_hash = LByteHash {};
+    let u64_hash = LU64Hash::new(KeccakF {});
+    let field_hash = LFieldHash::new(u64_hash);
+    let compress = LCompress::new(u64_hash);
+    let val_mmcs = LValMmcs::new(field_hash, compress, 0, mmcs_rng);
+    let challenge_mmcs = LChallengeMmcs::new(val_mmcs.clone());
+    let fri_config = FriConfig {
+        log_blowup: 2,
+        num_queries: 28,
+        log_final_poly_len: 0,
+        max_log_arity: 1,
+        commit_proof_of_work_bits: 0,
+        query_proof_of_work_bits: 8,
+        mmcs: challenge_mmcs,
+    };
+    let dft = LDft::new(LETTER_TRACE_HEIGHT << fri_config.log_blowup);
+    let pcs = LPcs::new(dft, val_mmcs, fri_config, LETTER_NUM_RANDOM_CODEWORDS, pcs_rng);
+    let challenger =
+        LChallenger::new(HashChallenger::<u8, LByteHash, 32>::new(vec![], byte_hash));
+    LConfig::new(pcs, challenger)
+}
 
 /// Public-value layout for LETTER (18 elements — same width as POSTCARD, score swapped for commitment):
 ///   [0..16] agent_id (16 bytes), [16] threshold, [17] score_commitment.
@@ -106,14 +181,31 @@ where
     }
 }
 
-fn letter_trace<F: Field>(repid: u64, threshold: u64) -> RowMajorMatrix<F> {
+/// Build the LETTER trace. Row 0 is the real witness row (gap bits in cols 16..32, zeros in cols
+/// 0..16, repid in col 32). Rows 1.. are MASKING rows: cols 0..16 stay zero (per-row `assert_zero`),
+/// cols 16..32 hold RANDOM bits (per-row `assert_bool` still holds), and col 32 holds a RANDOM field
+/// element. Because the score-binding constraint is `when_first_row`, the masking rows do NOT weaken
+/// soundness; they DO make every witness-bearing column a high-degree polynomial, so the STARK's
+/// out-of-domain opening at zeta reveals nothing about row 0's witness (the height-1 OOD-leak fix).
+fn letter_trace<F: Field>(repid: u64, threshold: u64, rng: &mut SmallRng) -> RowMajorMatrix<F> {
+    let mut values = Vec::with_capacity(LETTER_TRACE_HEIGHT * LETTER_WIDTH);
+    // Row 0 — the real witness row.
     let gap = (repid - threshold - 1) as u32;
-    let mut row = Vec::with_capacity(LETTER_WIDTH);
     for i in (0..32).rev() {
-        row.push(if (gap & (1 << i)) != 0 { F::ONE } else { F::ZERO });
+        values.push(if (gap & (1 << i)) != 0 { F::ONE } else { F::ZERO });
     }
-    row.push(F::from_u32(repid as u32));
-    RowMajorMatrix::new(row, LETTER_WIDTH)
+    values.push(F::from_u32(repid as u32));
+    // Rows 1.. — random masking rows (satisfy per-row constraints, unconstrained by when_first_row).
+    for _ in 1..LETTER_TRACE_HEIGHT {
+        for _ in 0..16 {
+            values.push(F::ZERO);
+        }
+        for _ in 16..32 {
+            values.push(if rng.random::<bool>() { F::ONE } else { F::ZERO });
+        }
+        values.push(F::from_u32(rng.random::<u32>()));
+    }
+    RowMajorMatrix::new(values, LETTER_WIDTH)
 }
 
 fn letter_public_values(agent_id: &str, threshold: u64, commitment: u32) -> Result<Vec<BabyBear>, String> {
@@ -152,38 +244,14 @@ pub fn prove_letter(agent_id: &str, threshold: u64, repid_score: u64, nonce: u64
         return Err("gap >= 2^16 (out of 16-bit range)".into());
     }
 
-    type Val = BabyBear;
-    type Challenge = BinomialExtensionField<Val, 4>;
-    type ByteHash = Keccak256Hash;
-    type FieldHash = SerializingHasher<ByteHash>;
-    type MyCompress = CompressionFunctionFromHasher<ByteHash, 2, 32>;
-    type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 2, 32>;
-    type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
-    type Dft = RecursiveDft<Val>;
-    type Pcs = p3_fri::TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
-
-    let byte_hash = ByteHash {};
-    let field_hash = FieldHash::new(ByteHash {});
-    let compress = MyCompress::new(byte_hash);
-    let val_mmcs = ValMmcs::new(field_hash, compress, 0);
-    let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
-
     let commitment = score_commitment(repid_score, nonce);
-    let trace = letter_trace::<Val>(repid_score, threshold);
 
-    let fri_config = FriConfig {
-        log_blowup: 2,
-        num_queries: 28,
-        log_final_poly_len: 0,
-        max_log_arity: 1,
-        commit_proof_of_work_bits: 0,
-        query_proof_of_work_bits: 8,
-        mmcs: challenge_mmcs,
-    };
-    let dft = Dft::new(trace.height() << fri_config.log_blowup);
-    let pcs = Pcs::new(dft, val_mmcs, fri_config);
-    let challenger = SerializingChallenger32::new(HashChallenger::<u8, ByteHash, 32>::new(vec![], byte_hash));
-    let config = StarkConfig::new(pcs, challenger);
+    // Entropy-seeded RNGs are the hiding secret: `trace_rng` draws the masking rows, and the two
+    // config RNGs salt the Merkle leaves + draw the FRI random codewords. Fresh per proof, so the
+    // same statement yields a different (non-linkable) proof each time.
+    let mut trace_rng = rand::make_rng::<SmallRng>();
+    let trace = letter_trace::<LVal>(repid_score, threshold, &mut trace_rng);
+    let config = letter_config(rand::make_rng::<SmallRng>(), rand::make_rng::<SmallRng>());
 
     let public_values = letter_public_values(agent_id, threshold, commitment)?;
     let air = RepIdLetterAir;
@@ -197,34 +265,8 @@ pub fn prove_letter(agent_id: &str, threshold: u64, repid_score: u64, nonce: u64
 /// Verify a LETTER proof against the public statement {agent_id, threshold, score_commitment}.
 /// The verifier never learns the score; it learns only that the hidden score exceeds threshold.
 pub fn verify_letter(proof_bytes: &[u8], agent_id: &str, threshold: u64, commitment: u32) -> Result<(), String> {
-    type Val = BabyBear;
-    type Challenge = BinomialExtensionField<Val, 4>;
-    type ByteHash = Keccak256Hash;
-    type FieldHash = SerializingHasher<ByteHash>;
-    type MyCompress = CompressionFunctionFromHasher<ByteHash, 2, 32>;
-    type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 2, 32>;
-    type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
-    type Dft = RecursiveDft<Val>;
-    type Pcs = p3_fri::TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
-
-    let byte_hash = ByteHash {};
-    let field_hash = FieldHash::new(ByteHash {});
-    let compress = MyCompress::new(byte_hash);
-    let val_mmcs = ValMmcs::new(field_hash, compress, 0);
-    let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
-    let fri_config = FriConfig {
-        log_blowup: 2,
-        num_queries: 28,
-        log_final_poly_len: 0,
-        max_log_arity: 1,
-        commit_proof_of_work_bits: 0,
-        query_proof_of_work_bits: 8,
-        mmcs: challenge_mmcs,
-    };
-    let dft = Dft::new(1usize << fri_config.log_blowup);
-    let pcs = Pcs::new(dft, val_mmcs, fri_config);
-    let challenger = SerializingChallenger32::new(HashChallenger::<u8, ByteHash, 32>::new(vec![], byte_hash));
-    let config = StarkConfig::new(pcs, challenger);
+    // Verification draws no randomness, so fixed seeds are correct and keep verify deterministic.
+    let config = letter_config(SmallRng::seed_from_u64(0), SmallRng::seed_from_u64(0));
 
     let proof: p3_uni_stark::Proof<_> =
         bincode::deserialize(proof_bytes).map_err(|e| format!("deserialize: {}", e))?;
@@ -257,6 +299,24 @@ mod tests {
         assert!(!pv.contains(&repid_felt), "repid_score must NOT be a public value");
         assert_eq!(pv.len(), LETTER_NUM_PUBLIC_VALUES);
         assert_eq!(pv[LPUB_COMMITMENT], BabyBear::new(commitment));
+    }
+
+    #[test]
+    fn letter_proof_is_randomized_yet_verifies() {
+        // B2 hiding evidence: with the hiding PCS + entropy RNG, proving the SAME statement twice
+        // yields DIFFERENT proof bytes (random salts, codewords, and masking rows). A non-hiding
+        // (deterministic) STARK would emit byte-identical proofs — so a difference here is the
+        // observable signature that the zero-knowledge machinery is actually engaged. Both proofs
+        // must still verify against the same public statement.
+        let a = prove_letter(AGENT, THRESHOLD, REPID, NONCE).unwrap();
+        let b = prove_letter(AGENT, THRESHOLD, REPID, NONCE).unwrap();
+        assert_eq!(a.score_commitment, b.score_commitment, "same (score,nonce) → same commitment");
+        assert_ne!(
+            a.proof_bytes, b.proof_bytes,
+            "hiding proof must be randomized: two proofs of the same statement must differ"
+        );
+        verify_letter(&a.proof_bytes, AGENT, THRESHOLD, a.score_commitment).unwrap();
+        verify_letter(&b.proof_bytes, AGENT, THRESHOLD, b.score_commitment).unwrap();
     }
 
     #[test]
