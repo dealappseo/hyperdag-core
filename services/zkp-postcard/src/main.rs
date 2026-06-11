@@ -8,6 +8,7 @@ mod circuit;
 mod corpus;
 mod aggregate;
 mod letter;
+mod envelope;
 mod epoch;
 mod recursion_spike;
 
