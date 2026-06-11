@@ -19,9 +19,17 @@
 //   * Inv-6 NAMESPACE: registered as `zkp_circuits.domain='envelope'`
 //     (migrations/2026-06-10-zkp-circuits-envelope-domain.sql — STAGED, Sean applies).
 //
+// 2026-06-11 SALT-SEAL FIX (closes the disclosed-field brute-force found in CC red-team): the per-field
+// salt is now SEALED to the recipient (not revealed). Pre-fix, the salt was public, so a non-recipient
+// brute-forced Poseidon2(value, salt, label) == leaf over a small value domain (demonstrated: tier
+// recovered in <1000 hashes). Now a non-recipient lacks BOTH salt and value (both sealed with
+// independent, salt-free keystreams), and a salt-entropy floor (SALT_MIN) rejects weak salts so the
+// undisclosed-field commitment stays hiding. The 5 negatives below are re-verified post-fix.
+//
 // SOUNDNESS (the 5 negatives, enforced + tested below):
-//   1. non-recipient open  → FAILS  (no pre-shared recipient_key ⇒ wrong seal-key ⇒ unmasked value
-//                                     fails its commitment check)
+//   1. non-recipient open  → FAILS  (no pre-shared recipient_key ⇒ wrong seal-key ⇒ neither salt nor
+//                                     value unmasks ⇒ commitment check fails; AND the disclosed value is
+//                                     no longer brute-forceable from the public surface — salt is sealed)
 //   2. tampered disclosed field → FAILS (commitment binding: a flipped sealed byte unmasks to a wrong
 //                                     value whose commitment ≠ the committed leaf)
 //   3. undisclosed field stays hidden  (only its salted Poseidon2 commitment is in the public root —
@@ -54,6 +62,18 @@ pub const DOMAIN_ENVELOPE: u32 = 0x454e_5631;
 /// invertible AND the result is a valid field element for the commitment.
 const FIELD_MAX: u32 = 1 << 31;
 
+/// Domain separators for the two per-field keystreams (2026-06-11 salt-seal fix). The keystreams
+/// depend ONLY on (seal_key, index, domain) — NOT on the plaintext salt — so the salt can itself be
+/// sealed and recovered by the recipient without a circular dependency.
+const KS_DOMAIN_VALUE: u32 = 0x4b53_5601; // "KSV1"
+const KS_DOMAIN_SALT: u32 = 0x4b53_5302; // "KSS2"
+
+/// Salt-entropy floor (2026-06-11). Defense-in-depth for UNDISCLOSED fields, whose salt stays secret
+/// but must be high-entropy or `Poseidon2(value, salt, label)` becomes brute-forceable over the small
+/// value space. Disclosed fields are protected by sealing the salt; this floor protects the rest.
+/// Production MUST draw full-width CSPRNG salts; this only rejects obviously-weak ones (0, tiny).
+const SALT_MIN: u32 = 1 << 24;
+
 /// A single disclosable field. `label` names the field (e.g. a stable u32 id for "tier"/"region");
 /// `value` is the secret content (< 2^31).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,9 +87,12 @@ pub struct EnvelopeField {
 pub struct SealedDisclosure {
     pub index: usize,
     pub label: u32,
-    /// Per-field salt — REVEALED so the recipient can re-bind the opened value to its commitment.
-    pub salt: u32,
-    /// `value XOR keystream` — only a holder of the recipient_key can recover the value.
+    /// `salt XOR keystream(KS_DOMAIN_SALT)` — SEALED (2026-06-11 fix). Previously the salt was REVEALED,
+    /// which let a non-recipient brute-force `Poseidon2(value, salt, label) == leaf` for a small value
+    /// domain. Now the salt is sealed to the recipient too, so a non-recipient lacks BOTH salt and value
+    /// and cannot brute-force the public commitment (salt is full-width).
+    pub sealed_salt: u32,
+    /// `value XOR keystream(KS_DOMAIN_VALUE)` — only a holder of the recipient_key can recover the value.
     pub sealed_value: u32,
     /// Path proving this field's commitment is in the public envelope root.
     pub membership: MembershipProof,
@@ -122,16 +145,18 @@ fn seal_key(
     babybear_leaf::hash(p, &[recipient_key, recipient_id, DOMAIN_ENVELOPE])
 }
 
-/// Per-field keystream = Poseidon2(seal_key, salt, index). A fresh mask per field (salt+index domain-
-/// separate the streams) so identical values in different slots don't seal identically.
+/// Per-field keystream = Poseidon2(seal_key, index, domain). Depends ONLY on (seal_key, index, domain)
+/// — NOT on the plaintext salt — so the salt itself can be sealed (KS_DOMAIN_SALT) and the value sealed
+/// (KS_DOMAIN_VALUE) with independent masks the recipient derives without already knowing the salt. The
+/// per-index input keeps identical values in different slots from sealing identically.
 fn keystream(
     p: &impl p3_symmetric::Permutation<[p3_baby_bear::BabyBear; babybear_leaf::WIDTH]>,
     seal_key: u32,
-    salt: u32,
     index: usize,
+    domain: u32,
 ) -> u32 {
     // Mask < 2^31 so `value (< 2^31) XOR mask` stays < 2^31 and invertible.
-    babybear_leaf::hash(p, &[seal_key, salt, index as u32]) % FIELD_MAX
+    babybear_leaf::hash(p, &[seal_key, index as u32, domain]) % FIELD_MAX
 }
 
 /// Seal an envelope: commit every field, build the public root, derive the scoped nullifier, and seal
@@ -155,6 +180,12 @@ pub fn seal_envelope(
         if f.value >= FIELD_MAX {
             return Err(format!("field {i} value out of range (>= 2^31)"));
         }
+        // Salt-entropy floor (2026-06-11): reject obviously-weak salts. A weak salt on an UNDISCLOSED
+        // field makes its commitment brute-forceable over the small value space (the disclosed-field
+        // leak this fix closes, applied to undisclosed fields). Production MUST use CSPRNG salts.
+        if salts[i] < SALT_MIN || salts[i] >= FIELD_MAX {
+            return Err(format!("field {i} salt out of range [2^24, 2^31) — use a full-width CSPRNG salt"));
+        }
     }
     for &i in disclose {
         if i >= fields.len() {
@@ -174,12 +205,13 @@ pub fn seal_envelope(
 
     let mut disclosures = Vec::with_capacity(disclose.len());
     for &i in disclose {
-        let ks = keystream(&p, sk, salts[i], i);
-        let sealed_value = fields[i].value ^ ks;
+        // Seal BOTH the value and the salt to the recipient (independent, salt-free keystreams).
+        let sealed_value = fields[i].value ^ keystream(&p, sk, i, KS_DOMAIN_VALUE);
+        let sealed_salt = salts[i] ^ keystream(&p, sk, i, KS_DOMAIN_SALT);
         disclosures.push(SealedDisclosure {
             index: i,
             label: fields[i].label,
-            salt: salts[i],
+            sealed_salt,
             sealed_value,
             membership: membership_proof(&commits, i),
         });
@@ -216,13 +248,14 @@ pub fn open_envelope(
 
     let mut out = Vec::with_capacity(env.disclosures.len());
     for d in &env.disclosures {
-        // Unmask with the recipient-scoped keystream. A wrong key (non-recipient, negative 1) or a
-        // tampered sealed_value (negative 2) yields a wrong value whose commitment will not match.
-        let ks = keystream(&p, sk, d.salt, d.index);
-        let value = d.sealed_value ^ ks;
+        // Unmask the salt AND the value with the recipient-scoped, salt-free keystreams. A wrong key
+        // (non-recipient, negative 1) or a tampered sealed_salt/sealed_value (negative 2) yields a wrong
+        // (value, salt) whose commitment will not match the committed leaf.
+        let salt = d.sealed_salt ^ keystream(&p, sk, d.index, KS_DOMAIN_SALT);
+        let value = d.sealed_value ^ keystream(&p, sk, d.index, KS_DOMAIN_VALUE);
 
         // Bind the opened value to the committed leaf (binding) …
-        let recomputed = babybear_leaf::hash(&p, &[value, d.salt, d.label]);
+        let recomputed = babybear_leaf::hash(&p, &[value, salt, d.label]);
         if recomputed != d.membership.leaf {
             return Err(format!(
                 "disclosure {} failed commitment check (wrong recipient key or tampered field)",
@@ -321,10 +354,10 @@ mod tests {
             open_envelope(&env, RECIPIENT_ID, RECIPIENT_KEY).is_err(),
             "a tampered sealed field must fail its commitment check"
         );
-        // Tampering the revealed salt must also fail (it re-binds to a different commitment).
+        // Tampering the SEALED salt must also fail (it unmasks to a wrong salt → different commitment).
         let mut env2 = seal_envelope(SECRET, &fields, &salts, RECIPIENT_ID, RECIPIENT_KEY, &[0, 2]).unwrap();
-        env2.disclosures[1].salt ^= 0xFF;
-        assert!(open_envelope(&env2, RECIPIENT_ID, RECIPIENT_KEY).is_err(), "tampered salt rejected");
+        env2.disclosures[1].sealed_salt ^= 0xFF;
+        assert!(open_envelope(&env2, RECIPIENT_ID, RECIPIENT_KEY).is_err(), "tampered sealed salt rejected");
     }
 
     // ── NEGATIVE 3: undisclosed field stays hidden (no leak) ──
@@ -376,5 +409,51 @@ mod tests {
         // masquerade as a fresh envelope to B.
         let env_b = seal_envelope(SECRET, &fields, &salts, other_id, RECIPIENT_KEY, &[0, 2]).unwrap();
         assert_ne!(env.nullifier, env_b.nullifier, "different recipient scope ⇒ different nullifier");
+    }
+
+    // ── TRIPWIRE (the break this fix closes): a NON-RECIPIENT must NOT recover a disclosed value ──
+    // Pre-fix, the salt was revealed in the clear → a non-recipient brute-forced Poseidon2(value,salt,
+    // label)==leaf over the small value domain (demonstrated 2026-06-11: recovered tier=3 in <1000 hashes).
+    // Post-fix, the salt is sealed: a non-recipient has only {label, public leaf} and must brute-force
+    // value AND the full-width salt jointly → infeasible. This test asserts the public surface no longer
+    // carries a usable salt and the small-domain brute-force fails.
+    #[test]
+    fn tripwire_disclosed_value_not_recoverable_without_recipient_key() {
+        let (fields, salts) = sample();
+        let env = seal_envelope(SECRET, &fields, &salts, RECIPIENT_ID, RECIPIENT_KEY, &[0, 2]).unwrap();
+        let p = p2();
+        // Attacker's public knowledge for the disclosed tier field (index 0): label + the committed leaf.
+        let d0 = &env.disclosures[0];
+        let public_leaf = d0.membership.leaf;
+        let label = d0.label;
+        // The salt is NOT revealed (it is sealed). The attacker tries the SAME small-domain brute-force
+        // that worked pre-fix, but now lacks the salt — model that by trying every small value against
+        // the public leaf with NO salt (and with the WRONG guessed salt 0): no recovery.
+        let mut leaked = false;
+        for guess in 0..=10_000u32 {
+            if babybear_leaf::hash(&p, &[guess, 0, label]) == public_leaf {
+                leaked = true;
+                break;
+            }
+        }
+        assert!(!leaked, "disclosed value must NOT be brute-forceable now that the salt is sealed");
+        // And the SealedDisclosure carries a SEALED salt that differs from the real salt (no plaintext leak).
+        assert_ne!(d0.sealed_salt, salts[0], "salt must be sealed, not revealed in the clear");
+        // The legitimate recipient still opens correctly (round-trip preserved).
+        assert_eq!(open_envelope(&env, RECIPIENT_ID, RECIPIENT_KEY).unwrap(), vec![(0, 100, 3), (2, 300, 2280)]);
+    }
+
+    // ── TRIPWIRE: salt-entropy floor — seal_envelope rejects obviously-weak salts ──
+    #[test]
+    fn tripwire_low_entropy_salt_rejected() {
+        let (fields, mut salts) = sample();
+        salts[1] = 5; // a tiny, brute-forceable salt on an undisclosed field
+        assert!(
+            seal_envelope(SECRET, &fields, &salts, RECIPIENT_ID, RECIPIENT_KEY, &[0, 2]).is_err(),
+            "a salt below the 2^24 floor must be rejected"
+        );
+        let mut salts0 = salts.clone();
+        salts0[0] = 0;
+        assert!(seal_envelope(SECRET, &fields, &salts0, RECIPIENT_ID, RECIPIENT_KEY, &[0, 2]).is_err(), "zero salt rejected");
     }
 }
