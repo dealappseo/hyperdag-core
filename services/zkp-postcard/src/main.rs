@@ -9,6 +9,7 @@ mod corpus;
 mod aggregate;
 mod letter;
 mod envelope;
+mod package;
 mod epoch;
 mod recursion_spike;
 
