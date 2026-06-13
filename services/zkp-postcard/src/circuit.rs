@@ -450,4 +450,61 @@ mod tests {
             "repid < threshold MUST fail"
         );
     }
+
+    // ── M1: human↔agent binding 0→1 (Vertical A). Reuses the REAL substrate ONLY:
+    //    babybear_leaf::{commitment,nullifier} (canonical Poseidon2-16, Inv-1) + prove_range_check
+    //    (real Plonky3 STARK, pin 27d59f73). NO new circuit, NO stub. Emits the binding bundle the
+    //    TS/DB layer consumes to mint a (mock-issuer, testnet) human SBT + register the scoped
+    //    nullifier + create the custodianship link. Inputs are env-overridable (defaults = demo).
+    //    The accompanying STARK proves the CAPABILITY statement (agent repid > base threshold); the
+    //    Poseidon2 commitment+scoped-nullifier ARE the cryptographic identity binding (Inv-2). The
+    //    in-circuit Poseidon2 AIR (proving nullifier-derivation inside the STARK) is the documented
+    //    next layer — not claimed here.
+    fn envu(k: &str, d: u32) -> u32 { std::env::var(k).ok().and_then(|s| s.parse().ok()).unwrap_or(d) }
+    fn envs(k: &str, d: &str) -> String { std::env::var(k).unwrap_or_else(|_| d.to_string()) }
+
+    #[test]
+    fn m1_emit_binding_bundle() {
+        use sha2::{Digest, Sha256};
+        let secret = envu("M1_SECRET", 1234567);
+        let rand = envu("M1_RAND", 7654321);
+        let trapdoor = envu("M1_TRAPDOOR", 1111111);
+        let scope = envu("M1_SCOPE", 1); // = agent_dbt_id (ownership scope, Inv-2 parameter)
+        let agent = envs("M1_AGENT", AGENT_A);
+        let repid = envu("M1_REPID", 2280) as u64;
+        let threshold = envu("M1_THRESHOLD", 499) as u64; // base-tier capability floor
+
+        let p = babybear_leaf::poseidon2_16();
+        // C1 = human identity commitment (Semaphore-style, real Poseidon2).
+        let commitment = babybear_leaf::commitment(&p, secret, rand, trapdoor);
+        // Scoped nullifier N(secret, agentId) — Inv-2.
+        let nullifier = babybear_leaf::nullifier(&p, secret, scope);
+        // Inv-2 unlinkability self-check: same secret, different scope => different nullifier.
+        assert_ne!(nullifier, babybear_leaf::nullifier(&p, secret, scope.wrapping_add(1)),
+            "Inv-2 violated: nullifier not scope-separated");
+
+        // REAL Plonky3 STARK: agent repid > base threshold (self-verifies inside).
+        let gap = (repid - threshold - 1) as u32;
+        let proof_bytes = prove_range_check(gap, &agent, threshold, repid)
+            .expect("real STARK proof must generate + self-verify");
+        // Independent re-verify of the serialized proof against the public statement.
+        {
+            let config = test_config!();
+            let air = RepIdRangeCheckAir { value: gap };
+            let pv = build_public_values(&agent, threshold, repid).unwrap();
+            let decoded: Proof<_> = bincode::deserialize(&proof_bytes).expect("deserialize");
+            verify(&config, &air, &decoded, &pv).expect("re-verify must pass");
+        }
+        let leaf = poseidon2_postcard_leaf(&agent, threshold, repid);
+        let proof_digest = {
+            let mut h = Sha256::new(); h.update(&proof_bytes);
+            format!("0x{}", h.finalize().iter().map(|b| format!("{:02x}", b)).collect::<String>())
+        };
+        let out_path = envs("M1_PROOF_OUT", "m1_proof.bin");
+        std::fs::write(&out_path, &proof_bytes).expect("write proof bytes");
+
+        // Emit the binding bundle (single parse-able line).
+        println!("M1_BUNDLE_JSON={{\"commitment\":{},\"nullifier\":{},\"scope\":{},\"leaf\":\"{}\",\"agent_id\":\"{}\",\"repid\":{},\"threshold\":{},\"proof_len\":{},\"proof_digest\":\"{}\",\"proof_file\":\"{}\",\"scheme\":\"poseidon2_babybear\",\"pin\":\"27d59f73\",\"verified\":true}}",
+            commitment, nullifier, scope, leaf, agent, repid, threshold, proof_bytes.len(), proof_digest, out_path);
+    }
 }
