@@ -33,6 +33,15 @@ impl<F: Field> BaseAir<F> for RepIdRangeCheckAir {
     fn width(&self) -> usize {
         32
     }
+
+    /// PHASE B — declare the 32 public values (the agent-bound commitment elements). Without this the
+    /// prover commits ZERO public values and the commitment passed to `prove_range_check` is silently
+    /// dropped (prove_range_check's own verify then fails). Declaring them makes the prover absorb the
+    /// commitment into the Fiat-Shamir transcript, so a proof for agent A's commitment is REJECTED when
+    /// verified against agent B's (agent-binding). See test_agent_binding_rejects_swapped_commitment.
+    fn num_public_values(&self) -> usize {
+        32
+    }
 }
 
 impl<AB: AirBuilder> Air<AB> for RepIdRangeCheckAir where AB::F: Field {
@@ -189,8 +198,10 @@ mod tests {
         let challenger = SerializingChallenger32::new(HashChallenger::<u8, ByteHash, 32>::new(vec![], byte_hash.clone()));
         let config = StarkConfig::new(pcs, challenger);
 
-        let proof = prove(&config, &air, trace, &vec![]);
-        
+        // 32 public values now required (the agent-bound commitment). Use a dummy commitment here.
+        let pv_rt = commitment_to_babybear(&"cc".repeat(32)).expect("round-trip pv decode");
+        let proof = prove(&config, &air, trace, &pv_rt);
+
         // Serialize
         let encoded: Vec<u8> = bincode::serialize(&proof).expect("Serialization failed");
         
@@ -199,6 +210,63 @@ mod tests {
         let decoded: Proof<_> = bincode::deserialize(&encoded).expect("Deserialization failed");
         
         // Verify decoded proof
-        verify(&config, &air, &decoded, &vec![]).expect("Verification of decoded proof failed");
+        verify(&config, &air, &decoded, &pv_rt).expect("Verification of decoded proof failed");
+    }
+
+    /// AGENT-BINDING (Phase B): agent_id is folded into the sha256 commitment, which is passed as the
+    /// proof's public_values. A proof generated for agent A's commitment MUST be REJECTED when verified
+    /// against agent B's commitment — otherwise a proof could be replayed under a different identity.
+    /// The binding holds because the public_values are absorbed into the Fiat-Shamir transcript, so a
+    /// mismatched commitment diverges the verifier's challenges and verification fails.
+    #[test]
+    fn test_agent_binding_rejects_swapped_commitment() {
+        let value = 100u32;
+        let air = RepIdRangeCheckAir { value };
+
+        type Val = BabyBear;
+        type Challenge = BinomialExtensionField<Val, 4>;
+        type ByteHash = Keccak256Hash;
+        type FieldHash = SerializingHasher<ByteHash>;
+        type MyCompress = CompressionFunctionFromHasher<ByteHash, 2, 32>;
+        type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 2, 32>;
+        type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+        type Dft = RecursiveDft<Val>;
+        type Pcs = p3_fri::TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
+
+        let byte_hash = ByteHash {};
+        let field_hash = FieldHash::new(ByteHash {});
+        let compress = MyCompress::new(byte_hash);
+        let val_mmcs = ValMmcs::new(field_hash, compress, 0);
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+        let fri_config = FriConfig {
+            log_blowup: 2, num_queries: 28,
+            log_final_poly_len: 0, max_log_arity: 1, commit_proof_of_work_bits: 0, query_proof_of_work_bits: 8,
+            mmcs: challenge_mmcs,
+        };
+        let trace = generate_trace::<Val>(value);
+        let dft = Dft::new(trace.height() << fri_config.log_blowup);
+        let pcs = Pcs::new(dft, val_mmcs, fri_config);
+        let challenger = SerializingChallenger32::new(HashChallenger::<u8, ByteHash, 32>::new(vec![], byte_hash.clone()));
+        let config = StarkConfig::new(pcs, challenger);
+
+        // Two distinct agent commitments (in prod: sha256("hyperdag_v1:{agent_id}:{repid}:{threshold}")).
+        let commitment_a = "aa".repeat(32);
+        let commitment_b = "bb".repeat(32);
+        let pv_a = commitment_to_babybear(&commitment_a).expect("commitment A decode");
+        let pv_b = commitment_to_babybear(&commitment_b).expect("commitment B decode");
+        assert_ne!(pv_a, pv_b, "distinct agent commitments must decode to distinct public values");
+
+        // Prove for agent A.
+        let proof = prove(&config, &air, trace, &pv_a);
+
+        // Correct agent verifies.
+        verify(&config, &air, &proof, &pv_a)
+            .expect("agent A's proof must verify against agent A's commitment");
+
+        // Swapped agent_id (agent B's commitment) is REJECTED.
+        assert!(
+            verify(&config, &air, &proof, &pv_b).is_err(),
+            "AGENT-BINDING VIOLATION: a proof for agent A verified against agent B's commitment"
+        );
     }
 }

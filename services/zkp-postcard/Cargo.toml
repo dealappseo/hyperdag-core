@@ -8,20 +8,21 @@ name = "zkp-postcard"
 path = "src/main.rs"
 
 [dependencies]
-# Plonky3 — git pinned to latest main
-p3-field = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
-p3-baby-bear = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
-p3-fri = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
-p3-merkle-tree = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
-p3-matrix = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
-p3-challenger = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
-p3-commit = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
-p3-uni-stark = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
-p3-symmetric = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
-p3-dft = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
-p3-air = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
-p3-keccak = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
-p3-monty-31 = { git = "https://github.com/Plonky3/Plonky3", branch = "main" }
+# Plonky3 — PINNED to the lockstep rev (Inv5 / P-026); matches babybear-leaf + Cargo.lock. Do NOT
+# drift this independently — all Plonky3 circuits bump together or aggregation/verification breaks.
+p3-field = { git = "https://github.com/Plonky3/Plonky3", rev = "27d59f7350daf6b02d11b01c3a55af453554b515" }
+p3-baby-bear = { git = "https://github.com/Plonky3/Plonky3", rev = "27d59f7350daf6b02d11b01c3a55af453554b515" }
+p3-fri = { git = "https://github.com/Plonky3/Plonky3", rev = "27d59f7350daf6b02d11b01c3a55af453554b515" }
+p3-merkle-tree = { git = "https://github.com/Plonky3/Plonky3", rev = "27d59f7350daf6b02d11b01c3a55af453554b515" }
+p3-matrix = { git = "https://github.com/Plonky3/Plonky3", rev = "27d59f7350daf6b02d11b01c3a55af453554b515" }
+p3-challenger = { git = "https://github.com/Plonky3/Plonky3", rev = "27d59f7350daf6b02d11b01c3a55af453554b515" }
+p3-commit = { git = "https://github.com/Plonky3/Plonky3", rev = "27d59f7350daf6b02d11b01c3a55af453554b515" }
+p3-uni-stark = { git = "https://github.com/Plonky3/Plonky3", rev = "27d59f7350daf6b02d11b01c3a55af453554b515" }
+p3-symmetric = { git = "https://github.com/Plonky3/Plonky3", rev = "27d59f7350daf6b02d11b01c3a55af453554b515" }
+p3-dft = { git = "https://github.com/Plonky3/Plonky3", rev = "27d59f7350daf6b02d11b01c3a55af453554b515" }
+p3-air = { git = "https://github.com/Plonky3/Plonky3", rev = "27d59f7350daf6b02d11b01c3a55af453554b515" }
+p3-keccak = { git = "https://github.com/Plonky3/Plonky3", rev = "27d59f7350daf6b02d11b01c3a55af453554b515" }
+p3-monty-31 = { git = "https://github.com/Plonky3/Plonky3", rev = "27d59f7350daf6b02d11b01c3a55af453554b515" }
 
 # Standard deps
 axum = "0.7"
